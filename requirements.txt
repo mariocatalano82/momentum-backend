@@ -1,6 +1,4 @@
 fastapi
 uvicorn
 requests
-pandas
-numpy
-apscheduler
+google-auth
