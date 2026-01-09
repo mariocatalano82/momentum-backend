@@ -1,21 +1,14 @@
-import os
-import json
-import time
-import random
 import requests
-from typing import List
-from fastapi import FastAPI, Body, Query
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-
-from google.oauth2 import service_account
-from google.auth.transport.requests import Request
 
 # =========================================================
 # APP
 # =========================================================
 app = FastAPI(
     title="Momentum Backend",
-    version="1.0.0"
+    version="1.2.0",
+    description="Short-term crypto momentum (1–2h probability)"
 )
 
 app.add_middleware(
@@ -26,165 +19,120 @@ app.add_middleware(
 )
 
 # =========================================================
-# FCM CONFIG (HTTP v1)
+# CONFIG
 # =========================================================
-SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT")
-if not SERVICE_ACCOUNT_JSON:
-    raise RuntimeError("FIREBASE_SERVICE_ACCOUNT not configured")
-
-SERVICE_ACCOUNT_INFO = json.loads(SERVICE_ACCOUNT_JSON)
-PROJECT_ID = SERVICE_ACCOUNT_INFO["project_id"]
-
-SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
-FCM_ENDPOINT = (
-    f"https://fcm.googleapis.com/v1/projects/{PROJECT_ID}/messages:send"
-)
-
-# =========================================================
-# STATE (volatile – ok per ora)
-# =========================================================
-REGISTERED_DEVICES: List[str] = []
-
-CRYPTO_LIST = [
-    "BTC", "ETH", "SOL", "XRP", "ADA",
-    "DOGE", "AVAX", "LINK", "DOT", "MATIC"
-]
+COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
 
 # =========================================================
 # HELPERS
 # =========================================================
-def get_access_token() -> str:
-    credentials = service_account.Credentials.from_service_account_info(
-        SERVICE_ACCOUNT_INFO, scopes=SCOPES
-    )
-    credentials.refresh(Request())
-    return credentials.token
+def fetch_market_data():
+    params = {
+        "vs_currency": "usd",
+        "order": "market_cap_desc",
+        "per_page": 50,
+        "page": 1,
+        "price_change_percentage": "1h,24h",
+    }
+    r = requests.get(COINGECKO_URL, params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
 
 
-def generate_ranking(direction: str, mode: str):
+def compute_short_term_score(change_1h: float, change_24h: float) -> float:
     """
-    direction: 'up' | 'down'
-    mode: 'balanced' | 'aggressive'
+    Stima della probabilità di continuità del movimento
+    nelle prossime 1–2 ore.
+
+    - 1h = driver principale (80%)
+    - 24h = contesto (20%), limitato per evitare distorsioni
     """
 
-    count = 5 if mode == "balanced" else random.randint(2, 4)
+    # contesto limitato per non dominare
+    context = max(min(change_24h, 5), -5)
 
-    selected = random.sample(CRYPTO_LIST, count)
-    data = []
+    score = (change_1h * 0.8) + (context * 0.2)
+    return score
 
-    for symbol in selected:
-        prob = random.uniform(55, 75) if direction == "up" else random.uniform(55, 75)
-        change = random.uniform(0.5, 3.5)
-        if direction == "down":
-            change *= -1
 
-        data.append({
-            "symbol": symbol,
-            "probability": round(prob, 1),
-            "change_1h": round(change, 2),
-            "explanation_simple": (
-                "Strong buying pressure detected"
-                if direction == "up"
-                else "Selling pressure increasing"
-            ),
-            "explanation_technical": (
-                "RSI trend + volume confirmation"
-                if direction == "up"
-                else "Bearish divergence on momentum indicators"
-            )
-        })
+def probability_from_score(score: float) -> float:
+    """
+    Converte lo score in probabilità realistica.
+    Niente numeri estremi o fuorvianti.
+    """
+    base = min(abs(score) * 6, 20)  # scala prudente
+    return round(55 + base, 1)
 
-    return data
 
+def format_coin(coin, score, change_1h, change_24h):
+    direction = "up" if score >= 0 else "down"
+
+    return {
+        "symbol": coin["symbol"].upper(),
+        "price": round(coin["current_price"], 4),
+        "probability": probability_from_score(score),
+        "change_1h": round(change_1h, 2),
+        "change_24h": round(change_24h, 2),
+        "explanation_simple": (
+            "Accelerazione oraria positiva con contesto favorevole"
+            if direction == "up"
+            else "Indebolimento orario con pressione recente"
+        ),
+        "explanation_technical": (
+            "Variazione 1h dominante, trend 24h di supporto"
+            if direction == "up"
+            else "Movimento 1h negativo rafforzato dal contesto"
+        ),
+    }
 
 # =========================================================
 # HEALTH
 # =========================================================
 @app.get("/")
 def root():
-    return {"status": "Momentum backend running"}
+    return {
+        "status": "Momentum backend running",
+        "focus": "Short-term probability (next 1–2h)"
+    }
 
 # =========================================================
 # RANKING
 # =========================================================
 @app.get("/ranking/up")
 def ranking_up(mode: str = Query("balanced")):
-    return generate_ranking("up", mode)
+    data = fetch_market_data()
+    results = []
+
+    for coin in data:
+        c1h = coin.get("price_change_percentage_1h_in_currency") or 0
+        c24h = coin.get("price_change_percentage_24h_in_currency") or 0
+
+        score = compute_short_term_score(c1h, c24h)
+
+        if score > 0:
+            results.append(format_coin(coin, score, c1h, c24h))
+
+    results.sort(key=lambda x: x["probability"], reverse=True)
+
+    limit = 5 if mode == "balanced" else 3
+    return results[:limit]
 
 
 @app.get("/ranking/down")
 def ranking_down(mode: str = Query("balanced")):
-    return generate_ranking("down", mode)
-
-# =========================================================
-# DEVICES
-# =========================================================
-@app.post("/register-device")
-def register_device(payload: dict = Body(...)):
-    token = payload.get("device_token")
-    if not token:
-        return {"error": "Missing device_token"}
-
-    if token not in REGISTERED_DEVICES:
-        REGISTERED_DEVICES.append(token)
-
-    return {"registered_devices": len(REGISTERED_DEVICES)}
-
-
-@app.get("/devices")
-def list_devices():
-    return REGISTERED_DEVICES
-
-# =========================================================
-# NOTIFY (TEST)
-# =========================================================
-@app.post("/notify-test")
-def notify_test():
-    if not REGISTERED_DEVICES:
-        return {"error": "No registered devices"}
-
-    access_token = get_access_token()
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json; UTF-8",
-    }
-
+    data = fetch_market_data()
     results = []
 
-    for token in REGISTERED_DEVICES:
-        message = {
-            "message": {
-                "token": token,
-                "notification": {
-                    "title": "Momentum 🔔",
-                    "body": "Nuove opportunità di mercato disponibili",
-                },
-                "data": {
-                    "type": "ranking_update",
-                    "ts": str(int(time.time()))
-                },
-                "android": {
-                    "priority": "HIGH"
-                }
-            }
-        }
+    for coin in data:
+        c1h = coin.get("price_change_percentage_1h_in_currency") or 0
+        c24h = coin.get("price_change_percentage_24h_in_currency") or 0
 
-        r = requests.post(
-            FCM_ENDPOINT,
-            headers=headers,
-            json=message,
-            timeout=10
-        )
+        score = compute_short_term_score(c1h, c24h)
 
-        try:
-            body = r.json()
-        except Exception:
-            body = r.text
+        if score < 0:
+            results.append(format_coin(coin, score, c1h, c24h))
 
-        results.append({
-            "status": r.status_code,
-            "response": body
-        })
+    results.sort(key=lambda x: x["probability"], reverse=True)
 
-    return {"results": results}
+    limit = 5 if mode == "balanced" else 3
+    return results[:limit]
