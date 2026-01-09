@@ -1,21 +1,20 @@
 from fastapi import APIRouter
 import random
-import time
 
 router = APIRouter()
 
 # =========================
-# CONFIGURAZIONE FILTRI
+# CONFIG
 # =========================
 
 STABLECOINS = {
     "USDT", "USDC", "DAI", "BUSD", "TUSD", "USDP", "FRAX"
 }
 
-MIN_VOLATILITY_1H = 0.3  # percentuale minima di movimento 1h
+MIN_VOLATILITY_1H = 0.3  # %
 
 # =========================
-# MOCK DATA (sostituibile con API reali)
+# MOCK MARKET DATA
 # =========================
 
 CRYPTO_MARKET = [
@@ -27,22 +26,42 @@ CRYPTO_MARKET = [
     {"symbol": "AVAX", "price": 42.7, "change_1h": -0.78},
     {"symbol": "ADA", "price": 0.59, "change_1h": -0.22},
     {"symbol": "DOT", "price": 8.41, "change_1h": 0.18},
-    {"symbol": "USDT", "price": 1.00, "change_1h": 0.01},
-    {"symbol": "USDC", "price": 1.00, "change_1h": 0.00},
 ]
 
 # =========================
-# LOGICA MOMENTUM
+# MOMENTUM LOGIC
 # =========================
 
 def compute_probability(change_1h: float) -> float:
-    """
-    Trasforma la variazione 1h in una probabilità (0–100)
-    semplice, stabile e interpretabile.
-    """
     base = min(abs(change_1h) * 35, 90)
-    noise = random.uniform(-3, 3)
+    noise = random.uniform(-4, 4)
     return round(max(5, min(base + noise, 95)), 1)
+
+def explanation_simple(change_1h: float) -> str:
+    if change_1h > 0:
+        return "Momentum positivo supportato da pressione in acquisto"
+    else:
+        return "Momentum negativo con prevalenza di vendite"
+
+def explanation_technical(change_1h: float) -> str:
+    intensity = abs(change_1h)
+
+    if intensity > 1.0:
+        strength = "movimento forte"
+    elif intensity > 0.6:
+        strength = "movimento moderato"
+    else:
+        strength = "movimento iniziale"
+
+    direction = "rialzista" if change_1h > 0 else "ribassista"
+
+    templates = [
+        f"{direction.capitalize()} {strength} nell’ultima ora",
+        f"Variazione {direction} ({change_1h:+.2f}%) su timeframe 1h",
+        f"Accelerazione {direction} con volatilità superiore alla media",
+    ]
+
+    return random.choice(templates)
 
 def analyze_market():
     results = []
@@ -51,11 +70,9 @@ def analyze_market():
         symbol = asset["symbol"].upper()
         change_1h = asset["change_1h"]
 
-        # ❌ Escludi stablecoin
         if symbol in STABLECOINS:
             continue
 
-        # ❌ Escludi asset piatti
         if abs(change_1h) < MIN_VOLATILITY_1H:
             continue
 
@@ -66,15 +83,16 @@ def analyze_market():
             "price": asset["price"],
             "change_1h": round(change_1h, 2),
             "probability": probability,
-            "explanation": "Positive momentum supported by volume"
-            if change_1h > 0 else
-            "Negative momentum with selling pressure"
+            # 🔹 S
+            "explanation_simple": explanation_simple(change_1h),
+            # 🔹 T
+            "explanation_technical": explanation_technical(change_1h),
         })
 
     return results
 
 # =========================
-# ENDPOINT API
+# API ENDPOINTS
 # =========================
 
 @router.get("/ranking/up")
@@ -88,4 +106,5 @@ def ranking_up():
 def ranking_down():
     data = analyze_market()
     data = [d for d in data if d["change_1h"] < 0]
-    data.
+    data.sort(key=lambda x: x["probability"], reverse=True)
+    return data[:5]
