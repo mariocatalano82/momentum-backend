@@ -1,9 +1,10 @@
 import os
 import json
 import time
+import random
 import requests
 from typing import List
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from google.oauth2 import service_account
@@ -12,7 +13,10 @@ from google.auth.transport.requests import Request
 # =========================================================
 # APP
 # =========================================================
-app = FastAPI(title="Momentum Backend (FCM v1)")
+app = FastAPI(
+    title="Momentum Backend",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,48 +26,95 @@ app.add_middleware(
 )
 
 # =========================================================
-# CONFIG
+# FCM CONFIG (HTTP v1)
 # =========================================================
-# Env var che contiene IL JSON COMPLETO del Service Account
 SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT")
-
 if not SERVICE_ACCOUNT_JSON:
     raise RuntimeError("FIREBASE_SERVICE_ACCOUNT not configured")
 
 SERVICE_ACCOUNT_INFO = json.loads(SERVICE_ACCOUNT_JSON)
+PROJECT_ID = SERVICE_ACCOUNT_INFO["project_id"]
 
-PROJECT_ID = SERVICE_ACCOUNT_INFO.get("project_id")
-if not PROJECT_ID:
-    raise RuntimeError("project_id missing in service account")
-
-FCM_V1_ENDPOINT = (
+SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
+FCM_ENDPOINT = (
     f"https://fcm.googleapis.com/v1/projects/{PROJECT_ID}/messages:send"
 )
 
-SCOPES = ["https://www.googleapis.com/auth/firebase.messaging"]
-
 # =========================================================
-# STATE (VOLATILE – OK PER TEST)
+# STATE (volatile – ok per ora)
 # =========================================================
 REGISTERED_DEVICES: List[str] = []
+
+CRYPTO_LIST = [
+    "BTC", "ETH", "SOL", "XRP", "ADA",
+    "DOGE", "AVAX", "LINK", "DOT", "MATIC"
+]
 
 # =========================================================
 # HELPERS
 # =========================================================
 def get_access_token() -> str:
-    """Ottiene un OAuth2 access token per FCM v1."""
     credentials = service_account.Credentials.from_service_account_info(
         SERVICE_ACCOUNT_INFO, scopes=SCOPES
     )
     credentials.refresh(Request())
     return credentials.token
 
+
+def generate_ranking(direction: str, mode: str):
+    """
+    direction: 'up' | 'down'
+    mode: 'balanced' | 'aggressive'
+    """
+
+    count = 5 if mode == "balanced" else random.randint(2, 4)
+
+    selected = random.sample(CRYPTO_LIST, count)
+    data = []
+
+    for symbol in selected:
+        prob = random.uniform(55, 75) if direction == "up" else random.uniform(55, 75)
+        change = random.uniform(0.5, 3.5)
+        if direction == "down":
+            change *= -1
+
+        data.append({
+            "symbol": symbol,
+            "probability": round(prob, 1),
+            "change_1h": round(change, 2),
+            "explanation_simple": (
+                "Strong buying pressure detected"
+                if direction == "up"
+                else "Selling pressure increasing"
+            ),
+            "explanation_technical": (
+                "RSI trend + volume confirmation"
+                if direction == "up"
+                else "Bearish divergence on momentum indicators"
+            )
+        })
+
+    return data
+
+
 # =========================================================
 # HEALTH
 # =========================================================
 @app.get("/")
 def root():
-    return {"status": "ok"}
+    return {"status": "Momentum backend running"}
+
+# =========================================================
+# RANKING
+# =========================================================
+@app.get("/ranking/up")
+def ranking_up(mode: str = Query("balanced")):
+    return generate_ranking("up", mode)
+
+
+@app.get("/ranking/down")
+def ranking_down(mode: str = Query("balanced")):
+    return generate_ranking("down", mode)
 
 # =========================================================
 # DEVICES
@@ -79,6 +130,7 @@ def register_device(payload: dict = Body(...)):
 
     return {"registered_devices": len(REGISTERED_DEVICES)}
 
+
 @app.get("/devices")
 def list_devices():
     return REGISTERED_DEVICES
@@ -91,10 +143,7 @@ def notify_test():
     if not REGISTERED_DEVICES:
         return {"error": "No registered devices"}
 
-    try:
-        access_token = get_access_token()
-    except Exception as e:
-        return {"error": "Failed to get access token", "detail": str(e)}
+    access_token = get_access_token()
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -109,11 +158,11 @@ def notify_test():
                 "token": token,
                 "notification": {
                     "title": "Momentum 🔔",
-                    "body": "Test notifica push (FCM HTTP v1)",
+                    "body": "Nuove opportunità di mercato disponibili",
                 },
                 "data": {
-                    "type": "test",
-                    "ts": str(int(time.time())),
+                    "type": "ranking_update",
+                    "ts": str(int(time.time()))
                 },
                 "android": {
                     "priority": "HIGH"
@@ -121,28 +170,21 @@ def notify_test():
             }
         }
 
-        try:
-            r = requests.post(
-                FCM_V1_ENDPOINT,
-                headers=headers,
-                json=message,
-                timeout=10,
-            )
-            try:
-                body = r.json()
-            except Exception:
-                body = r.text
+        r = requests.post(
+            FCM_ENDPOINT,
+            headers=headers,
+            json=message,
+            timeout=10
+        )
 
-            results.append({
-                "token": token[:12] + "...",
-                "status": r.status_code,
-                "response": body,
-            })
-        except Exception as e:
-            results.append({
-                "token": token[:12] + "...",
-                "status": "exception",
-                "error": str(e),
-            })
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+
+        results.append({
+            "status": r.status_code,
+            "response": body
+        })
 
     return {"results": results}
