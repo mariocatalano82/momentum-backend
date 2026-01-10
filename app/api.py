@@ -5,7 +5,6 @@ import time
 
 app = FastAPI()
 
-# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,101 +12,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIG ---
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
-VS_CURRENCY = "usd"
+VS = "usd"
 TOP_N = 5
-TIMEOUT = 10
 
-# --- GLOBAL STATE (CACHE) ---
 last_valid_up = []
 last_valid_down = []
 last_update = None
 market_state = "neutral"
 
 
-# --- HELPERS ---
-def fetch_market_data():
+def fetch_and_compute():
+    global last_valid_up, last_valid_down, last_update, market_state
+
     params = {
-        "vs_currency": VS_CURRENCY,
+        "vs_currency": VS,
         "order": "market_cap_desc",
-        "per_page": 100,        # ✅ whitelist TOP 100
+        "per_page": 100,
         "page": 1,
         "price_change_percentage": "1h,24h",
     }
-    r = requests.get(COINGECKO_URL, params=params, timeout=TIMEOUT)
+
+    r = requests.get(COINGECKO_URL, params=params, timeout=10)
     r.raise_for_status()
-    return r.json()
+    data = r.json()
 
-
-def compute_rankings(data):
     ranked = []
-
-    for coin in data:
-        change_1h = coin.get("price_change_percentage_1h_in_currency") or 0.0
-        change_24h = coin.get("price_change_percentage_24h_in_currency") or 0.0
-
-        score = change_24h
-        probability = min(90, max(30, abs(score)))
-
+    for c in data:
+        ch1 = c.get("price_change_percentage_1h_in_currency") or 0
+        ch24 = c.get("price_change_percentage_24h_in_currency") or 0
+        score = ch24
         ranked.append({
-            "symbol": coin["symbol"].upper(),
-            "name": coin["name"],
-            "change_1h": round(change_1h, 2),
-            "change_24h": round(change_24h, 2),
+            "symbol": c["symbol"].upper(),
+            "name": c["name"],
+            "change_1h": round(ch1, 2),
+            "change_24h": round(ch24, 2),
             "score": round(score, 2),
-            "probability": round(probability, 2),
-            "explanation_simple": (
-                "Relative short-term strength" if score > 0
-                else "Relative short-term weakness"
-            ),
+            "probability": min(90, max(30, abs(round(score, 2)))),
+            "explanation_simple": "Relative short-term strength" if score > 0 else "Relative short-term weakness",
             "explanation_technical": "Relative strength vs broad crypto market",
             "data_quality": "normal"
         })
 
-    ranked_up = sorted(ranked, key=lambda x: x["score"], reverse=True)[:TOP_N]
-    ranked_down = sorted(ranked, key=lambda x: x["score"])[:TOP_N]
+    up = sorted(ranked, key=lambda x: x["score"], reverse=True)[:TOP_N]
+    down = sorted(ranked, key=lambda x: x["score"])[:TOP_N]
 
-    return ranked_up, ranked_down
+    last_valid_up = up
+    last_valid_down = down
+    last_update = time.time()
 
+    strongest = max([abs(x["score"]) for x in up + down], default=0)
+    market_state = "active" if strongest >= 1 else "neutral"
 
-def update_global_state(up, down):
-    global last_valid_up, last_valid_down, last_update, market_state
-
-    # ✅ SEMPRE aggiornare la cache se i dati esistono
-    if up or down:
-        last_valid_up = up
-        last_valid_down = down
-        last_update = time.time()
-
-    # market_state SOLO descrittivo
-    strongest = max(
-        [abs(x["score"]) for x in (up + down)],
-        default=0
-    )
-
-    market_state = "active" if strongest >= 1.0 else "neutral"
+    return up, down
 
 
-# --- ENDPOINTS ---
 @app.get("/ranking/up")
-def ranking_up(mode: str = "balanced"):
-    data = fetch_market_data()
-    up, down = compute_rankings(data)
-    update_global_state(up, down)
+def ranking_up():
+    up, _ = fetch_and_compute()
     return up
 
 
 @app.get("/ranking/down")
-def ranking_down(mode: str = "balanced"):
-    data = fetch_market_data()
-    up, down = compute_rankings(data)
-    update_global_state(up, down)
+def ranking_down():
+    _, down = fetch_and_compute()
     return down
 
 
 @app.get("/ranking/state")
 def ranking_state():
+    fetch_and_compute()
     return {
         "market_state": market_state,
         "last_valid_up": last_valid_up,
