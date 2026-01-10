@@ -41,7 +41,7 @@ SEED_UP = [
         "score": 1.2,
         "probability": 55,
         "explanation_simple": "Initial reference momentum",
-        "explanation_technical": "Synthetic baseline used before live signals",
+        "explanation_technical": "Synthetic baseline before live signals",
         "data_quality": "initial",
     },
     {
@@ -52,40 +52,7 @@ SEED_UP = [
         "score": 1.0,
         "probability": 52,
         "explanation_simple": "Initial reference momentum",
-        "explanation_technical": "Synthetic baseline used before live signals",
-        "data_quality": "initial",
-    },
-    {
-        "symbol": "SOL",
-        "name": "Solana",
-        "change_1h": 0.4,
-        "change_24h": 0.9,
-        "score": 0.9,
-        "probability": 50,
-        "explanation_simple": "Initial reference momentum",
-        "explanation_technical": "Synthetic baseline used before live signals",
-        "data_quality": "initial",
-    },
-    {
-        "symbol": "BNB",
-        "name": "BNB",
-        "change_1h": 0.3,
-        "change_24h": 0.7,
-        "score": 0.7,
-        "probability": 48,
-        "explanation_simple": "Initial reference momentum",
-        "explanation_technical": "Synthetic baseline used before live signals",
-        "data_quality": "initial",
-    },
-    {
-        "symbol": "XRP",
-        "name": "XRP",
-        "change_1h": 0.2,
-        "change_24h": 0.5,
-        "score": 0.5,
-        "probability": 45,
-        "explanation_simple": "Initial reference momentum",
-        "explanation_technical": "Synthetic baseline used before live signals",
+        "explanation_technical": "Synthetic baseline before live signals",
         "data_quality": "initial",
     },
 ]
@@ -99,7 +66,7 @@ SEED_DOWN = [
         "score": -1.1,
         "probability": 55,
         "explanation_simple": "Initial reference weakness",
-        "explanation_technical": "Synthetic baseline used before live signals",
+        "explanation_technical": "Synthetic baseline before live signals",
         "data_quality": "initial",
     },
     {
@@ -110,40 +77,7 @@ SEED_DOWN = [
         "score": -0.9,
         "probability": 52,
         "explanation_simple": "Initial reference weakness",
-        "explanation_technical": "Synthetic baseline used before live signals",
-        "data_quality": "initial",
-    },
-    {
-        "symbol": "DOT",
-        "name": "Polkadot",
-        "change_1h": -0.2,
-        "change_24h": -0.7,
-        "score": -0.7,
-        "probability": 50,
-        "explanation_simple": "Initial reference weakness",
-        "explanation_technical": "Synthetic baseline used before live signals",
-        "data_quality": "initial",
-    },
-    {
-        "symbol": "AVAX",
-        "name": "Avalanche",
-        "change_1h": -0.1,
-        "change_24h": -0.6,
-        "score": -0.6,
-        "probability": 48,
-        "explanation_simple": "Initial reference weakness",
-        "explanation_technical": "Synthetic baseline used before live signals",
-        "data_quality": "initial",
-    },
-    {
-        "symbol": "MATIC",
-        "name": "Polygon",
-        "change_1h": -0.05,
-        "change_24h": -0.4,
-        "score": -0.4,
-        "probability": 45,
-        "explanation_simple": "Initial reference weakness",
-        "explanation_technical": "Synthetic baseline used before live signals",
+        "explanation_technical": "Synthetic baseline before live signals",
         "data_quality": "initial",
     },
 ]
@@ -157,37 +91,53 @@ def fetch_binance_data():
     return r.json()
 
 
+def is_usdt_pair(symbol: str) -> bool:
+    return symbol.endswith("USDT") and len(symbol) > 4
+
+
+def normalize_symbol(symbol: str) -> str:
+    return symbol.replace("USDT", "")
+
+
 def compute_rankings():
     global LAST_VALID_UP, LAST_VALID_DOWN, LAST_UPDATE_TS
 
     data = fetch_binance_data()
-
     scored = []
+
     for item in data:
+        symbol = item.get("symbol", "")
+
+        if not is_usdt_pair(symbol):
+            continue
+
         try:
-            change_1h = float(item.get("priceChangePercent", 0)) / 24
             change_24h = float(item.get("priceChangePercent", 0))
+            change_1h = change_24h / 24
             score = change_24h
 
             scored.append({
-                "symbol": item["symbol"].replace("USDT", ""),
-                "name": item["symbol"].replace("USDT", ""),
+                "symbol": normalize_symbol(symbol),
+                "name": normalize_symbol(symbol),
                 "change_1h": round(change_1h, 2),
                 "change_24h": round(change_24h, 2),
                 "score": round(score, 2),
                 "probability": min(90, max(30, abs(round(score * 5, 2)))),
                 "explanation_simple": "Relative short-term momentum",
-                "explanation_technical": "Relative strength vs market average",
+                "explanation_technical": "Relative strength vs broad crypto market",
                 "data_quality": "normal",
             })
         except Exception:
             continue
 
+    if not scored:
+        return False
+
     ups = sorted(scored, key=lambda x: x["score"], reverse=True)[:TOP_N]
     downs = sorted(scored, key=lambda x: x["score"])[:TOP_N]
 
-    # consider market active only if meaningful dispersion exists
-    if ups and downs and ups[0]["score"] > 1.0:
+    # consider market active only if meaningful momentum exists
+    if ups and abs(ups[0]["score"]) > 1.0:
         LAST_VALID_UP = ups
         LAST_VALID_DOWN = downs
         LAST_UPDATE_TS = time.time()
@@ -207,7 +157,7 @@ def ranking_state():
     except Exception:
         market_active = False
 
-    # SEED if nothing exists yet
+    # seed if first run
     if not LAST_VALID_UP and not LAST_VALID_DOWN:
         LAST_VALID_UP = SEED_UP
         LAST_VALID_DOWN = SEED_DOWN
