@@ -5,9 +5,7 @@ import time
 
 app = FastAPI()
 
-# ===============================
-# CORS
-# ===============================
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,118 +13,104 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===============================
-# CONFIG
-# ===============================
-BINANCE_24H = "https://api.binance.com/api/v3/ticker/24hr"
+# --- CONFIG ---
+COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
+VS_CURRENCY = "usd"
+TOP_N = 5
+TIMEOUT = 10
 
-TOP100_WHITELIST = {
-    "BTC","ETH","BNB","SOL","XRP","ADA","AVAX","DOGE","TRX","DOT",
-    "LINK","MATIC","ATOM","LTC","BCH","ICP","NEAR","FIL","APT","ARB",
-    "OP","SUI","INJ","AAVE","UNI","IMX","RNDR","STX","KAS","XLM",
-    "ETC","HBAR","ALGO","VET","MKR","THETA","GRT","QNT","EGLD","AXS",
-    "FLOW","NEO","FTM","KAVA","SNX","RUNE","DYDX","ZEC","MINA","CAKE",
-    "COMP","LDO","GMX","PEPE","CRV","SAND","MANA","EOS","XTZ","KSM",
-    "AR","ROSE","CELO","1INCH","ENS","BAT","CHZ","BAL","ENJ","ZIL",
-    "OMG","ANKR","ICX","WAVES","QTUM","ZRX","SC","ONT","IOTA","HOT"
-}
+# --- GLOBAL STATE (CACHE) ---
+last_valid_up = []
+last_valid_down = []
+last_update = None
+market_state = "neutral"
 
-# ===============================
-# MARKET MEMORY (ANTI EMPTY UI)
-# ===============================
-market_state = {
-    "market_state": "neutral",
-    "last_valid_up": [],
-    "last_valid_down": [],
-    "last_update": None,
-}
 
-# ===============================
-# HELPERS
-# ===============================
-def fetch_binance_data():
-    r = requests.get(BINANCE_24H, timeout=10)
+# --- HELPERS ---
+def fetch_market_data():
+    params = {
+        "vs_currency": VS_CURRENCY,
+        "order": "market_cap_desc",
+        "per_page": 100,        # ✅ whitelist TOP 100
+        "page": 1,
+        "price_change_percentage": "1h,24h",
+    }
+    r = requests.get(COINGECKO_URL, params=params, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
-def normalize_symbol(symbol):
-    return symbol.replace("USDT", "")
 
-def build_entry(raw):
-    change_1h = float(raw.get("priceChangePercent", 0)) / 24
-    change_24h = float(raw.get("priceChangePercent", 0))
-    score = change_24h
+def compute_rankings(data):
+    ranked = []
 
-    probability = min(90, max(30, abs(score)))
+    for coin in data:
+        change_1h = coin.get("price_change_percentage_1h_in_currency") or 0.0
+        change_24h = coin.get("price_change_percentage_24h_in_currency") or 0.0
 
-    return {
-        "symbol": normalize_symbol(raw["symbol"]),
-        "name": normalize_symbol(raw["symbol"]),
-        "change_1h": round(change_1h, 2),
-        "change_24h": round(change_24h, 2),
-        "score": round(score, 2),
-        "probability": round(probability, 2),
-        "explanation_simple": "Relative short-term momentum",
-        "explanation_technical": "Relative strength vs broad crypto market",
-        "data_quality": "normal",
-    }
+        score = change_24h
+        probability = min(90, max(30, abs(score)))
 
-# ===============================
-# CORE RANKING
-# ===============================
-def compute_rankings():
-    data = fetch_binance_data()
+        ranked.append({
+            "symbol": coin["symbol"].upper(),
+            "name": coin["name"],
+            "change_1h": round(change_1h, 2),
+            "change_24h": round(change_24h, 2),
+            "score": round(score, 2),
+            "probability": round(probability, 2),
+            "explanation_simple": (
+                "Relative short-term strength" if score > 0
+                else "Relative short-term weakness"
+            ),
+            "explanation_technical": "Relative strength vs broad crypto market",
+            "data_quality": "normal"
+        })
 
-    filtered = []
-    for d in data:
-        if not d["symbol"].endswith("USDT"):
-            continue
+    ranked_up = sorted(ranked, key=lambda x: x["score"], reverse=True)[:TOP_N]
+    ranked_down = sorted(ranked, key=lambda x: x["score"])[:TOP_N]
 
-        base = normalize_symbol(d["symbol"])
-        if base not in TOP100_WHITELIST:
-            continue
+    return ranked_up, ranked_down
 
-        filtered.append(build_entry(d))
 
-    if not filtered:
-        return [], []
+def update_global_state(up, down):
+    global last_valid_up, last_valid_down, last_update, market_state
 
-    up = sorted(filtered, key=lambda x: x["score"], reverse=True)[:5]
-    down = sorted(filtered, key=lambda x: x["score"])[:5]
+    # ✅ SEMPRE aggiornare la cache se i dati esistono
+    if up or down:
+        last_valid_up = up
+        last_valid_down = down
+        last_update = time.time()
 
-    return up, down
+    # market_state SOLO descrittivo
+    strongest = max(
+        [abs(x["score"]) for x in (up + down)],
+        default=0
+    )
 
-# ===============================
-# API ENDPOINTS
-# ===============================
+    market_state = "active" if strongest >= 1.0 else "neutral"
+
+
+# --- ENDPOINTS ---
 @app.get("/ranking/up")
 def ranking_up(mode: str = "balanced"):
-    up, down = compute_rankings()
+    data = fetch_market_data()
+    up, down = compute_rankings(data)
+    update_global_state(up, down)
+    return up
 
-    if up:
-        market_state["market_state"] = "active"
-        market_state["last_valid_up"] = up
-        market_state["last_valid_down"] = down
-        market_state["last_update"] = time.time()
-
-        return up
-
-    return market_state["last_valid_up"]
 
 @app.get("/ranking/down")
 def ranking_down(mode: str = "balanced"):
-    up, down = compute_rankings()
+    data = fetch_market_data()
+    up, down = compute_rankings(data)
+    update_global_state(up, down)
+    return down
 
-    if down:
-        market_state["market_state"] = "active"
-        market_state["last_valid_up"] = up
-        market_state["last_valid_down"] = down
-        market_state["last_update"] = time.time()
-
-        return down
-
-    return market_state["last_valid_down"]
 
 @app.get("/ranking/state")
 def ranking_state():
-    return market_state
+    return {
+        "market_state": market_state,
+        "last_valid_up": last_valid_up,
+        "last_valid_down": last_valid_down,
+        "last_update": last_update
+    }
