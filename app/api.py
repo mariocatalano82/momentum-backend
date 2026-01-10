@@ -29,78 +29,74 @@ def fetch_binance():
     return r.json()
 
 
-def normalize_data():
-    cg = []
-    bn = {}
+def build_market_snapshot():
+    cg_data = []
+    bn_data = {}
 
     try:
-        cg = fetch_coingecko()
+        cg_data = fetch_coingecko()
     except Exception:
-        cg = []
+        cg_data = []
 
     try:
         bn_raw = fetch_binance()
         for item in bn_raw:
             if item["symbol"].endswith("USDT"):
                 symbol = item["symbol"].replace("USDT", "")
-                bn[symbol] = float(item["priceChangePercent"])
+                bn_data[symbol] = float(item["priceChangePercent"])
     except Exception:
-        bn = {}
+        bn_data = {}
 
-    merged = []
+    snapshot = []
 
-    for coin in cg:
+    for coin in cg_data:
         symbol = coin["symbol"].upper()
-        change_1h = coin.get("price_change_percentage_1h_in_currency") or 0
-        change_24h = coin.get("price_change_percentage_24h_in_currency") or 0
 
-        # Binance fallback / validation
-        if symbol in bn:
-            change_24h = (change_24h + bn[symbol]) / 2
+        ch1 = coin.get("price_change_percentage_1h_in_currency") or 0.0
+        ch24 = coin.get("price_change_percentage_24h_in_currency") or 0.0
 
-        score = (change_1h * 0.6) + (change_24h * 0.4)
+        # Binance validation
+        if symbol in bn_data:
+            ch24 = (ch24 + bn_data[symbol]) / 2
 
-        merged.append({
+        score = (ch1 * 0.6) + (ch24 * 0.4)
+
+        snapshot.append({
             "symbol": symbol,
             "name": coin["name"],
-            "change_1h": change_1h,
-            "change_24h": change_24h,
-            "probability": min(max(abs(score) * 10, 5), 95),
+            "change_1h": round(ch1, 2),
+            "change_24h": round(ch24, 2),
             "score": score,
+            "probability": max(5, min(abs(score) * 8, 95)),
             "explanation_simple": (
-                "Strong buying pressure detected"
-                if score > 0
-                else "Selling pressure increasing"
+                "Positive short-term momentum"
+                if score >= 0
+                else "Negative short-term momentum"
             ),
             "explanation_technical": (
-                "Momentum confirmed by multi-source validation"
-                if symbol in bn
-                else "Momentum based on primary market data"
+                "Multi-source momentum assessment"
+                if symbol in bn_data
+                else "Primary market momentum assessment"
             ),
         })
 
-    return merged
+    return snapshot
 
 
 @app.get("/ranking/up")
 def ranking_up(mode: str = Query("balanced")) -> List[dict]:
-    data = normalize_data()
+    data = build_market_snapshot()
 
-    threshold = 0.5 if mode == "balanced" else 0.2
+    # ordina SEMPRE
+    data.sort(key=lambda x: x["score"], reverse=True)
 
-    up = [c for c in data if c["score"] > threshold]
-    up.sort(key=lambda x: x["score"], reverse=True)
-
-    return up[:TOP_N]
+    return data[:TOP_N]
 
 
 @app.get("/ranking/down")
 def ranking_down(mode: str = Query("balanced")) -> List[dict]:
-    data = normalize_data()
+    data = build_market_snapshot()
 
-    threshold = -0.5 if mode == "balanced" else -0.2
+    data.sort(key=lambda x: x["score"])
 
-    down = [c for c in data if c["score"] < threshold]
-    down.sort(key=lambda x: x["score"])
-
-    return down[:TOP_N]
+    return data[:TOP_N]
