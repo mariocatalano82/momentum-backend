@@ -1,132 +1,160 @@
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 import requests
-from typing import List
+import time
+from typing import List, Dict
 
 app = FastAPI()
 
-COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
-BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/24hr"
+# --- CORS (necessario per Flutter Web / Android) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-TOP_N = 5
+# --- GLOBAL STATE (ULTIMI SEGNALI VALIDI) ---
+LAST_VALID_UP: List[Dict] = []
+LAST_VALID_DOWN: List[Dict] = []
+LAST_VALID_TIMESTAMP: float | None = None
+
+# --- CONFIG ---
+BINANCE_24H_API = "https://api.binance.com/api/v3/ticker/24hr"
+TOP_LIMIT = 50
+TOP_RESULT = 5
 
 
-def safe_float(v, default=0.0):
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-
-def fetch_coingecko():
-    params = {
-        "vs_currency": "usd",
-        "order": "market_cap_desc",
-        "per_page": 50,
-        "page": 1,
-        "price_change_percentage": "24h",
-    }
-    r = requests.get(COINGECKO_URL, params=params, timeout=10)
+# --- MARKET DATA ---
+def fetch_market_data() -> List[Dict]:
+    r = requests.get(BINANCE_24H_API, timeout=10)
     r.raise_for_status()
-    return r.json()
+    data = r.json()
 
-
-def fetch_binance_ticker():
-    r = requests.get(BINANCE_TICKER_URL, timeout=10)
-    r.raise_for_status()
-    return r.json()
-
-
-def build_market_snapshot():
-    snapshot = []
-    data_quality = "normal"
-
-    # --- Binance 24h (primary momentum feed)
-    bn_24h = {}
-    try:
-        for item in fetch_binance_ticker():
-            if item["symbol"].endswith("USDT"):
-                bn_24h[item["symbol"].replace("USDT", "")] = safe_float(
-                    item["priceChangePercent"]
-                )
-    except Exception:
-        data_quality = "degraded"
-
-    # --- CoinGecko (names + fallback)
-    try:
-        cg_data = fetch_coingecko()
-    except Exception:
-        cg_data = []
-        data_quality = "degraded"
-
-    # --- build snapshot
-    changes = list(bn_24h.values())
-    avg_change = sum(changes) / len(changes) if changes else 0
-
-    for coin in cg_data:
-        symbol = coin["symbol"].upper()
-        name = coin["name"]
-
-        ch24 = bn_24h.get(
-            symbol,
-            safe_float(coin.get("price_change_percentage_24h"), 0),
-        )
-
-        # relative momentum vs market
-        score = ch24 - avg_change
-
-        snapshot.append({
-            "symbol": symbol,
-            "name": name,
-            "change_1h": round(score, 2),  # proxy short-term momentum
-            "change_24h": round(ch24, 2),
-            "score": score,
-            "probability": max(20, min(abs(score) * 8 + 25, 90)),
-            "explanation_simple": (
-                "Relative short-term strength"
-                if score >= 0
-                else "Relative short-term weakness"
-            ),
-            "explanation_technical": (
-                "Relative momentum vs market average (Binance 24h ticker)"
-            ),
-            "data_quality": data_quality,
-        })
-
-    # --- absolute safety net (never empty)
-    if not snapshot:
-        data_quality = "degraded"
-        fallback = [
-            ("BTC", "Bitcoin"), ("ETH", "Ethereum"), ("BNB", "Binance Coin"),
-            ("SOL", "Solana"), ("XRP", "XRP"),
-            ("ADA", "Cardano"), ("AVAX", "Avalanche"),
-            ("DOGE", "Dogecoin"), ("DOT", "Polkadot"), ("MATIC", "Polygon"),
-        ]
-        for i, (sym, name) in enumerate(fallback):
-            score = (len(fallback) / 2 - i) * 0.1
-            snapshot.append({
-                "symbol": sym,
-                "name": name,
-                "change_1h": round(score, 2),
-                "change_24h": 0.0,
-                "score": score,
-                "probability": 30,
-                "explanation_simple": "Market data temporarily limited",
-                "explanation_technical": "Synthetic relative ranking",
-                "data_quality": "degraded",
+    # prendiamo solo le top coin più comuni
+    filtered = []
+    for item in data:
+        symbol = item.get("symbol", "")
+        if symbol.endswith("USDT"):
+            filtered.append({
+                "symbol": symbol.replace("USDT", ""),
+                "change_24h": float(item.get("priceChangePercent", 0.0))
             })
 
-    return snapshot
+    return filtered[:TOP_LIMIT]
+
+
+# --- MOMENTUM ENGINE ---
+def compute_momentum(data: List[Dict]) -> Dict[str, List[Dict]]:
+    ups = []
+    downs = []
+
+    for coin in data:
+        change = coin["change_24h"]
+
+        if change > 0:
+            ups.append({
+                "symbol": coin["symbol"],
+                "name": coin["symbol"],
+                "change_1h": round(change / 4, 2),   # proxy short-term
+                "change_24h": round(change, 2),
+                "score": change,
+                "probability": min(90, max(30, abs(change) * 10)),
+                "explanation_simple": "Relative short-term strength",
+                "explanation_technical": "Relative momentum vs market average (Binance 24h ticker)",
+                "data_quality": "normal"
+            })
+        elif change < 0:
+            downs.append({
+                "symbol": coin["symbol"],
+                "name": coin["symbol"],
+                "change_1h": round(change / 4, 2),
+                "change_24h": round(change, 2),
+                "score": change,
+                "probability": min(90, max(30, abs(change) * 10)),
+                "explanation_simple": "Relative short-term weakness",
+                "explanation_technical": "Relative momentum vs market average (Binance 24h ticker)",
+                "data_quality": "normal"
+            })
+
+    ups = sorted(ups, key=lambda x: x["score"], reverse=True)[:TOP_RESULT]
+    downs = sorted(downs, key=lambda x: x["score"])[:TOP_RESULT]
+
+    return {"up": ups, "down": downs}
+
+
+# --- FALLBACK (DEGRADED DATA) ---
+def degraded_fallback() -> Dict[str, List[Dict]]:
+    fallback_up = [
+        {"symbol": "BTC", "name": "Bitcoin", "change_1h": 0.0, "change_24h": 0.0, "score": 0.5,
+         "probability": 30, "explanation_simple": "Market data temporarily degraded",
+         "explanation_technical": "Synthetic relative ranking", "data_quality": "degraded"}
+    ]
+
+    fallback_down = [
+        {"symbol": "ETH", "name": "Ethereum", "change_1h": 0.0, "change_24h": 0.0, "score": -0.5,
+         "probability": 30, "explanation_simple": "Market data temporarily degraded",
+         "explanation_technical": "Synthetic relative ranking", "data_quality": "degraded"}
+    ]
+
+    return {"up": fallback_up, "down": fallback_down}
+
+
+# --- ENDPOINTS ---
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
 
 
 @app.get("/ranking/up")
-def ranking_up(mode: str = Query("balanced")) -> List[dict]:
-    data = build_market_snapshot()
-    data.sort(key=lambda x: x["score"], reverse=True)
-    return data[:TOP_N]
+def ranking_up(mode: str = Query("balanced")):
+    global LAST_VALID_UP, LAST_VALID_DOWN, LAST_VALID_TIMESTAMP
+
+    try:
+        data = fetch_market_data()
+        result = compute_momentum(data)
+
+        if result["up"]:
+            LAST_VALID_UP = result["up"]
+            LAST_VALID_DOWN = result["down"]
+            LAST_VALID_TIMESTAMP = time.time()
+            return result["up"]
+
+        # market neutral → ritorna ultimi segnali validi
+        return LAST_VALID_UP
+
+    except Exception:
+        return degraded_fallback()["up"]
 
 
 @app.get("/ranking/down")
-def ranking_down(mode: str = Query("balanced")) -> List[dict]:
-    data = build_market_snapshot()
-    data.sort(key=lambda x: x["score"])
-    return data[:TOP_N]
+def ranking_down(mode: str = Query("balanced")):
+    global LAST_VALID_UP, LAST_VALID_DOWN, LAST_VALID_TIMESTAMP
+
+    try:
+        data = fetch_market_data()
+        result = compute_momentum(data)
+
+        if result["down"]:
+            LAST_VALID_UP = result["up"]
+            LAST_VALID_DOWN = result["down"]
+            LAST_VALID_TIMESTAMP = time.time()
+            return result["down"]
+
+        # market neutral → ritorna ultimi segnali validi
+        return LAST_VALID_DOWN
+
+    except Exception:
+        return degraded_fallback()["down"]
+
+
+@app.get("/ranking/state")
+def ranking_state():
+    return {
+        "market_state": "neutral" if not LAST_VALID_UP and not LAST_VALID_DOWN else "active",
+        "last_valid_up": LAST_VALID_UP,
+        "last_valid_down": LAST_VALID_DOWN,
+        "last_update": LAST_VALID_TIMESTAMP
+    }
