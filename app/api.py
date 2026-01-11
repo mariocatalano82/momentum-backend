@@ -1,28 +1,24 @@
 from fastapi import FastAPI
-import threading
 import time
 import requests
 
 app = FastAPI()
 
-# ====== GLOBAL STATE ======
-STATE = {
-    "market_state": "neutral",
-    "last_valid_up": [],
-    "last_valid_down": [],
-    "last_update": None,
-}
-
-# ====== CONFIG ======
+CACHE_TTL = 120  # secondi
 COINGECKO_URL = (
     "https://api.coingecko.com/api/v3/coins/markets"
     "?vs_currency=usd&order=market_cap_desc&per_page=100&page=1"
     "&price_change_percentage=1h,24h"
 )
 
-REFRESH_SECONDS = 300  # 5 minuti
+STATE = {
+    "market_state": "neutral",
+    "last_valid_up": [],
+    "last_valid_down": [],
+    "last_update": 0,
+}
 
-# ====== CORE LOGIC ======
+
 def compute_rankings():
     try:
         r = requests.get(COINGECKO_URL, timeout=10)
@@ -33,6 +29,7 @@ def compute_rankings():
         for c in data:
             ch1 = c.get("price_change_percentage_1h_in_currency") or 0
             ch24 = c.get("price_change_percentage_24h_in_currency") or 0
+
             score = ch1 * 0.6 + ch24 * 0.4
 
             scored.append({
@@ -44,8 +41,8 @@ def compute_rankings():
                 "probability": min(90, max(30, abs(round(score * 2, 1)))),
                 "explanation_simple": "Short-term momentum signal",
                 "explanation_technical": (
-                    "Ranking derived from 1h and 24h relative performance "
-                    "within the broader crypto market"
+                    "Position determined by recent 1h acceleration "
+                    "combined with broader 24h trend context"
                 ),
                 "data_quality": "normal",
             })
@@ -53,47 +50,33 @@ def compute_rankings():
         up = sorted(scored, key=lambda x: x["score"], reverse=True)[:5]
         down = sorted(scored, key=lambda x: x["score"])[:5]
 
-        if up or down:
-            STATE["market_state"] = "active"
-            STATE["last_valid_up"] = up
-            STATE["last_valid_down"] = down
-            STATE["last_update"] = time.time()
-        else:
-            STATE["market_state"] = "neutral"
+        STATE["market_state"] = "active" if up or down else "neutral"
+        STATE["last_valid_up"] = up
+        STATE["last_valid_down"] = down
+        STATE["last_update"] = time.time()
 
-        print("✔ Momentum recomputed")
-
-    except Exception as e:
-        print("❌ Compute error:", e)
+    except Exception:
         STATE["market_state"] = "neutral"
 
 
-# ====== BACKGROUND LOOP ======
-def background_loop():
-    while True:
+def ensure_fresh_data():
+    if time.time() - STATE["last_update"] > CACHE_TTL:
         compute_rankings()
-        time.sleep(REFRESH_SECONDS)
 
 
-# ====== STARTUP ======
-@app.on_event("startup")
-def startup():
-    compute_rankings()  # calcolo immediato
-    t = threading.Thread(target=background_loop, daemon=True)
-    t.start()
-
-
-# ====== API ======
 @app.get("/ranking/state")
 def ranking_state():
+    ensure_fresh_data()
     return STATE
 
 
 @app.get("/ranking/up")
 def ranking_up():
+    ensure_fresh_data()
     return STATE["last_valid_up"]
 
 
 @app.get("/ranking/down")
 def ranking_down():
+    ensure_fresh_data()
     return STATE["last_valid_down"]
