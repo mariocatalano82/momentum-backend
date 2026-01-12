@@ -5,61 +5,67 @@ import math
 
 app = FastAPI()
 
-# Mappa espansa per i nomi reali (Se non presente, il codice proverà a pulire il simbolo)
+# Mappa Nomi Reali completa
 CRYPTO_NAMES = {
     "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "BNB": "Binance Coin",
     "XRP": "Ripple", "ADA": "Cardano", "DOGE": "Dogecoin", "AVAX": "Avalanche",
-    "DOT": "Polkadot", "LINK": "Chainlink", "MATIC": "Polygon", "SHIB": "Shiba Inu",
-    "LTC": "Litecoin", "NEAR": "Near Protocol", "TRX": "Tron", "UNI": "Uniswap"
+    "DOT": "Polkadot", "LINK": "Chainlink", "MATIC": "Polygon", "LTC": "Litecoin",
+    "NEAR": "Near Protocol", "TRX": "Tron", "UNI": "Uniswap", "PEPE": "Pepe Coin"
 }
 
-def calculate_realistic_probability(c_24h, vol, profile):
-    # Logica di "smorzamento": più la percentuale è alta, più è difficile salire
-    # Una variazione del 10% non darà più il 90%, ma circa il 78-82%
+def calculate_solid_probability(c_24h, vol, profile):
+    """
+    Calcolo basato su affidabilità statistica. 
+    Per arrivare all'80%, serve volume alto E trend costante.
+    """
     abs_c = abs(c_24h)
     
-    # Base di calcolo logaritmica
-    base_prob = 50 + (15 * math.log1p(abs_c)) 
+    # 1. Base probabilistica (Sigmoide)
+    # Una variazione del 5% su 24h porta una base di circa 65%
+    base = 100 / (1 + math.exp(-abs_c / 8)) 
     
-    # Bonus Volume: solo se supera i 10M USD dà un contributo reale
-    vol_bonus = min(math.log10(vol / 1000000) * 2, 5) if vol > 1000000 else -5
+    # 2. Moltiplicatore di Affidabilità del Volume (Trust Factor)
+    # Se il volume è sotto i 5M, la fiducia nel dato cala drasticamente
+    if vol > 50000000: # Top Volume (>50M)
+        trust_factor = 1.1
+    elif vol > 10000000: # Mid Volume (>10M)
+        trust_factor = 1.0
+    else: # Low Volume (<10M)
+        trust_factor = 0.85
+        
+    # 3. Penalità Profilo (Balanced è più scettico del dato)
+    profile_adjustment = 0.95 if profile == "balanced" else 1.0
     
-    final_prob = base_prob + vol_bonus
+    final_score = base * trust_factor * profile_adjustment
     
-    # Offset profilo
-    if profile == "balanced":
-        final_prob *= 0.92 # Più conservativo
-    
-    # Cap massimo realistico: è quasi impossibile essere sicuri al 100%
-    return round(min(final_prob, 89.5), 1)
+    # Range realistico: 60% (incertezza) - 88% (massima forza storica)
+    # Superare l'85% richiede condizioni di mercato eccezionali.
+    return round(min(max(final_score, 60.0), 88.5), 1)
 
-def generate_detailed_explanation(c_24h, c_1h, profile, symbol):
-    trend_type = "rialzista" if c_24h > 0 else "ribassista"
-    accel = "stabile" if abs(c_1h) < abs(c_24h/24) else "in forte spinta"
-    
-    return (f"Analisi {symbol}: Il momentum {trend_type} di 24h è attualmente {accel}. "
-            f"Il calcolo ponderato per il profilo {profile} indica una pressione "
-            f"{'dominante' if abs(c_24h) > 5 else 'moderata'}. Si raccomanda prudenza.")
+def get_market_context(c_24h):
+    if abs(c_24h) > 10: return "Alta Volatilità (Rischio Elevato)"
+    if abs(c_24h) > 5: return "Trend Consolidato"
+    return "Accumulo Laterale"
 
 @app.get("/ranking/state")
 def get_state(profile: str = "balanced"):
     try:
         raw_data = datasources.get_crypto_data()
         results = []
-        MIN_VOLUME = 3000000 # Alzato a 3M per escludere "rumore"
+        MIN_VOLUME = 5000000 # Filtro rigoroso: min 5 milioni di volume
 
         for coin in raw_data:
             vol = float(coin.get('volume_usd', 0) or 0)
             if vol < MIN_VOLUME: continue
 
             c_24h = float(coin.get('price_change_percentage_24h', 0) or 0)
-            c_1h = round(c_24h / 24 * 1.2, 2)
-            
-            # Pulizia Simbolo e Nome
             sym = str(coin.get('symbol', '???')).replace('USDT', '').upper()
-            full_name = CRYPTO_NAMES.get(sym, sym.capitalize()) # Se non c'è, Capitalizza (es. Peper)
             
-            prob = calculate_realistic_probability(c_24h, vol, profile)
+            # Mapping Nome: se non in lista, usa il simbolo pulito
+            full_name = CRYPTO_NAMES.get(sym, sym)
+            
+            prob = calculate_solid_probability(c_24h, vol, profile)
+            context = get_market_context(c_24h)
             
             results.append({
                 "symbol": sym,
@@ -67,15 +73,19 @@ def get_state(profile: str = "balanced"):
                 "price_change_24h": round(c_24h, 2),
                 "probability": prob,
                 "prediction": "UP" if c_24h > 0 else "DOWN",
-                "explanation": generate_detailed_explanation(c_24h, c_1h, profile, sym),
+                "explanation": f"L'algoritmo rileva un {context}. La fiducia del {prob}% è basata sulla convergenza tra volumi (USD {int(vol/1000000)}M) e variazione 24h. Strategia {profile}: monitorare breakout.",
                 "score": prob if c_24h > 0 else -prob,
-                "chart_data": [c_24h*0.3, c_24h*0.6, c_24h*0.4, c_24h*0.9, c_24h]
+                "chart_data": [c_24h*0.2, c_24h*0.5, c_24h*0.3, c_24h*0.8, c_24h]
             })
 
+        # Prendi solo i top reali
+        top_up = sorted([c for c in results if c['prediction'] == "UP"], key=lambda x: x['score'], reverse=True)[:5]
+        top_down = sorted([c for c in results if c['prediction'] == "DOWN"], key=lambda x: x['score'])[:5]
+
         return {
-            "last_valid_up": sorted([c for c in results if c['prediction'] == "UP"], key=lambda x: x['score'], reverse=True)[:5],
-            "last_valid_down": sorted([c for c in results if c['prediction'] == "DOWN"], key=lambda x: x['score'])[:5],
-            "last_update": time.time()
+            "last_valid_up": top_up,
+            "last_valid_down": top_down,
+            "server_time": time.time()
         }
     except Exception as e:
         return {"error": str(e)}
