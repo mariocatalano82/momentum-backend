@@ -5,25 +5,18 @@ import time
 app = FastAPI()
 
 def generate_tech_explanation(coin, profile):
-    c_24h = coin['price_change_24h']
-    # Simulazione trend breve termine per l'analisi
-    trend_type = "rialzista" if c_24h > 0 else "ribassista"
+    c_24h = coin['price_change_percentage_24h']
     intensity = "elevata" if abs(c_24h) > 5 else "moderata"
     
-    # Linguaggio differenziato per profilo
     if profile == "aggressive":
-        intro = f"Analisi di Breakout: L'asset mostra una volatilità {intensity}. "
-        action = "Ideale per strategie scalping con stop-loss stretto."
+        intro = f"Analisi Breakout: Volatilità {intensity}. "
+        action = "Ideale per strategie scalping ad alto rischio."
     else:
-        intro = f"Analisi di Momentum: Movimento {trend_type} con forza {intensity}. "
-        action = "Il contesto suggerisce una gestione prudente della posizione."
+        intro = f"Analisi Momentum: Forza {intensity}. "
+        action = "Suggerita gestione prudente della posizione."
 
-    if c_24h > 0:
-        detail = f"Il momentum delle ultime 24h (+{c_24h}%) indica accumulo. Nelle ultime 2 ore la pressione in acquisto è dominante."
-    else:
-        detail = f"La contrazione del {abs(c_24h)}% evidenzia una fase di distribuzione. Il trend di breve termine resta sotto pressione."
-
-    return f"{intro}{detail} {action}"
+    detail = f"Il movimento di {round(c_24h, 2)}% nelle 24h indica una fase di {'accumulo' if c_24h > 0 else 'distribuzione'}."
+    return f"{intro} {detail} {action}"
 
 @app.get("/ranking/state")
 def get_state(profile: str = "balanced"):
@@ -32,22 +25,18 @@ def get_state(profile: str = "balanced"):
 
     for coin in raw_data:
         c_24h = coin.get('price_change_percentage_24h', 0)
-        # Calcolo Confidence semplificato
-        prob = abs(c_24h) * 12
-        if profile == "aggressive":
-            prob = prob * 1.3
-        
-        confidence = min(round(prob, 1), 98.9)
-        prediction = "UP" if c_24h > 0 else "DOWN"
+        # Calcolo Confidence coerente
+        prob = min(round(abs(c_24h) * 12 * (1.3 if profile == "aggressive" else 0.8), 1), 98.9)
+        pred = "UP" if c_24h > 0 else "DOWN"
         
         results.append({
             "symbol": coin['symbol'].upper(),
             "name": coin['name'],
             "price_change_24h": round(c_24h, 2),
-            "probability": confidence,
-            "prediction": prediction,
+            "probability": prob,
+            "prediction": pred,
             "explanation": generate_tech_explanation(coin, profile),
-            "score": confidence if prediction == "UP" else -confidence
+            "score": prob if pred == "UP" else -prob
         })
 
     top_up = sorted([c for c in results if c['prediction'] == "UP"], key=lambda x: x['score'], reverse=True)[:5]
