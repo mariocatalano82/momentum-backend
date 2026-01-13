@@ -2,9 +2,11 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import time
+from typing import List, Dict
 
 app = FastAPI()
 
+# --- CORS (necessario per Flutter Web / Android) ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,107 +15,146 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-COINGECKO_URL = (
-    "https://api.coingecko.com/api/v3/coins/markets"
-    "?vs_currency=usd"
-    "&order=market_cap_desc"
-    "&per_page=50"
-    "&page=1"
-    "&price_change_percentage=1h,24h"
-)
+# --- GLOBAL STATE (ULTIMI SEGNALI VALIDI) ---
+LAST_VALID_UP: List[Dict] = []
+LAST_VALID_DOWN: List[Dict] = []
+LAST_VALID_TIMESTAMP: float | None = None
 
-CACHE = {"data": None, "timestamp": 0}
-CACHE_TTL = 120  # seconds
+# --- CONFIG ---
+BINANCE_24H_API = "https://api.binance.com/api/v3/ticker/24hr"
+TOP_LIMIT = 50
+TOP_RESULT = 5
 
 
-def fetch_market_data():
-    now = time.time()
-    if CACHE["data"] and now - CACHE["timestamp"] < CACHE_TTL:
-        return CACHE["data"]
-
-    r = requests.get(COINGECKO_URL, timeout=10)
+# --- MARKET DATA ---
+def fetch_market_data() -> List[Dict]:
+    r = requests.get(BINANCE_24H_API, timeout=10)
     r.raise_for_status()
     data = r.json()
 
-    CACHE["data"] = data
-    CACHE["timestamp"] = now
-    return data
+    # prendiamo solo le top coin più comuni
+    filtered = []
+    for item in data:
+        symbol = item.get("symbol", "")
+        if symbol.endswith("USDT"):
+            filtered.append({
+                "symbol": symbol.replace("USDT", ""),
+                "change_24h": float(item.get("priceChangePercent", 0.0))
+            })
+
+    return filtered[:TOP_LIMIT]
 
 
-def score_coin(coin, mode):
-    change_1h = coin.get("price_change_percentage_1h_in_currency") or 0
-    change_24h = coin.get("price_change_percentage_24h_in_currency") or 0
+# --- MOMENTUM ENGINE ---
+def compute_momentum(data: List[Dict]) -> Dict[str, List[Dict]]:
+    ups = []
+    downs = []
 
-    if mode == "aggressive":
-        score = change_1h * 1.5 + change_24h * 0.5
-    else:
-        score = change_1h * 0.7 + change_24h * 0.3
+    for coin in data:
+        change = coin["change_24h"]
 
-    return round(score, 2)
+        if change > 0:
+            ups.append({
+                "symbol": coin["symbol"],
+                "name": coin["symbol"],
+                "change_1h": round(change / 4, 2),   # proxy short-term
+                "change_24h": round(change, 2),
+                "score": change,
+                "probability": min(90, max(30, abs(change) * 10)),
+                "explanation_simple": "Relative short-term strength",
+                "explanation_technical": "Relative momentum vs market average (Binance 24h ticker)",
+                "data_quality": "normal"
+            })
+        elif change < 0:
+            downs.append({
+                "symbol": coin["symbol"],
+                "name": coin["symbol"],
+                "change_1h": round(change / 4, 2),
+                "change_24h": round(change, 2),
+                "score": change,
+                "probability": min(90, max(30, abs(change) * 10)),
+                "explanation_simple": "Relative short-term weakness",
+                "explanation_technical": "Relative momentum vs market average (Binance 24h ticker)",
+                "data_quality": "normal"
+            })
+
+    ups = sorted(ups, key=lambda x: x["score"], reverse=True)[:TOP_RESULT]
+    downs = sorted(downs, key=lambda x: x["score"])[:TOP_RESULT]
+
+    return {"up": ups, "down": downs}
 
 
-def build_response(coin, probability, direction):
-    return {
-        "symbol": coin["symbol"].upper(),
-        "name": coin["name"],  # ✅ NOME COMPLETO AGGIUNTO
-        "probability": probability,
-        "change_1h": round(
-            coin.get("price_change_percentage_1h_in_currency") or 0, 2
-        ),
-        "change_24h": round(
-            coin.get("price_change_percentage_24h_in_currency") or 0, 2
-        ),
-        "explanation_simple": (
-            "Strong buying pressure detected"
-            if direction == "up"
-            else "Selling pressure increasing"
-        ),
-        "explanation_technical": (
-            "RSI trend + volume confirmation"
-            if direction == "up"
-            else "Bearish divergence on momentum indicators"
-        ),
-    }
+# --- FALLBACK (DEGRADED DATA) ---
+def degraded_fallback() -> Dict[str, List[Dict]]:
+    fallback_up = [
+        {"symbol": "BTC", "name": "Bitcoin", "change_1h": 0.0, "change_24h": 0.0, "score": 0.5,
+         "probability": 30, "explanation_simple": "Market data temporarily degraded",
+         "explanation_technical": "Synthetic relative ranking", "data_quality": "degraded"}
+    ]
+
+    fallback_down = [
+        {"symbol": "ETH", "name": "Ethereum", "change_1h": 0.0, "change_24h": 0.0, "score": -0.5,
+         "probability": 30, "explanation_simple": "Market data temporarily degraded",
+         "explanation_technical": "Synthetic relative ranking", "data_quality": "degraded"}
+    ]
+
+    return {"up": fallback_up, "down": fallback_down}
+
+
+# --- ENDPOINTS ---
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
 
 
 @app.get("/ranking/up")
 def ranking_up(mode: str = Query("balanced")):
-    data = fetch_market_data()
+    global LAST_VALID_UP, LAST_VALID_DOWN, LAST_VALID_TIMESTAMP
 
-    scored = []
-    for coin in data:
-        score = score_coin(coin, mode)
-        if score > 0:
-            scored.append((score, coin))
+    try:
+        data = fetch_market_data()
+        result = compute_momentum(data)
 
-    scored.sort(reverse=True, key=lambda x: x[0])
-    top = scored[:5]
+        if result["up"]:
+            LAST_VALID_UP = result["up"]
+            LAST_VALID_DOWN = result["down"]
+            LAST_VALID_TIMESTAMP = time.time()
+            return result["up"]
 
-    return [
-        build_response(coin, min(90, abs(score) * 10), "up")
-        for score, coin in top
-    ]
+        # market neutral → ritorna ultimi segnali validi
+        return LAST_VALID_UP
+
+    except Exception:
+        return degraded_fallback()["up"]
 
 
 @app.get("/ranking/down")
 def ranking_down(mode: str = Query("balanced")):
-    data = fetch_market_data()
+    global LAST_VALID_UP, LAST_VALID_DOWN, LAST_VALID_TIMESTAMP
 
-    scored = []
-    for coin in data:
-        score = score_coin(coin, mode)
-        if score < 0:
-            scored.append((score, coin))
+    try:
+        data = fetch_market_data()
+        result = compute_momentum(data)
 
-    scored.sort(key=lambda x: x[0])
-    top = scored[:5]
+        if result["down"]:
+            LAST_VALID_UP = result["up"]
+            LAST_VALID_DOWN = result["down"]
+            LAST_VALID_TIMESTAMP = time.time()
+            return result["down"]
 
-    return [
-        build_response(coin, min(90, abs(score) * 10), "down")
-        for score, coin in top
-    ]
+        # market neutral → ritorna ultimi segnali validi
+        return LAST_VALID_DOWN
+
+    except Exception:
+        return degraded_fallback()["down"]
 
 
-@app.get("/")
-def root():
-    return {"status": "Momentum backend running"}
+@app.get("/ranking/state")
+def ranking_state():
+    return {
+        "market_state": "neutral" if not LAST_VALID_UP and not LAST_VALID_DOWN else "active",
+        "last_valid_up": LAST_VALID_UP,
+        "last_valid_down": LAST_VALID_DOWN,
+        "last_update": LAST_VALID_TIMESTAMP
+    }
