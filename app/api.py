@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 # =========================================================
 app = FastAPI(
     title="Momentum Backend",
-    version="1.3.0",
-    description="Short-term crypto momentum (1–2h, cached)"
+    version="1.3.1",
+    description="Short-term crypto momentum (1–2h, cached & safe)"
 )
 
 app.add_middleware(
@@ -26,7 +26,7 @@ COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
 CACHE_TTL = 60  # seconds
 
 # =========================================================
-# CACHE (in-memory)
+# CACHE
 # =========================================================
 _market_cache = {
     "timestamp": 0,
@@ -36,10 +36,16 @@ _market_cache = {
 # =========================================================
 # HELPERS
 # =========================================================
+def safe_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def fetch_market_data():
     now = time.time()
 
-    # Usa cache se valida
     if now - _market_cache["timestamp"] < CACHE_TTL:
         return _market_cache["data"]
 
@@ -53,7 +59,6 @@ def fetch_market_data():
 
     r = requests.get(COINGECKO_URL, params=params, timeout=10)
 
-    # Se CoinGecko risponde male, usa cache precedente
     if r.status_code != 200:
         if _market_cache["data"]:
             return _market_cache["data"]
@@ -77,15 +82,15 @@ def probability_from_score(score: float) -> float:
     return round(55 + base, 1)
 
 
-def format_coin(coin, score, change_1h, change_24h):
+def format_coin(coin, score, c1h, c24h):
     direction = "up" if score >= 0 else "down"
 
     return {
-        "symbol": coin["symbol"].upper(),
-        "price": round(coin["current_price"], 4),
+        "symbol": coin.get("symbol", "").upper(),
+        "price": round(safe_float(coin.get("current_price")), 4),
         "probability": probability_from_score(score),
-        "change_1h": round(change_1h, 2),
-        "change_24h": round(change_24h, 2),
+        "change_1h": round(c1h, 2),
+        "change_24h": round(c24h, 2),
         "explanation_simple": (
             "Accelerazione oraria positiva con contesto favorevole"
             if direction == "up"
@@ -114,35 +119,43 @@ def root():
 # =========================================================
 @app.get("/ranking/up")
 def ranking_up(mode: str = Query("balanced")):
-    data = fetch_market_data()
-    results = []
+    try:
+        data = fetch_market_data()
+        results = []
 
-    for coin in data:
-        c1h = coin.get("price_change_percentage_1h_in_currency") or 0
-        c24h = coin.get("price_change_percentage_24h_in_currency") or 0
-        score = compute_short_term_score(c1h, c24h)
+        for coin in data:
+            c1h = safe_float(coin.get("price_change_percentage_1h_in_currency"))
+            c24h = safe_float(coin.get("price_change_percentage_24h_in_currency"))
+            score = compute_short_term_score(c1h, c24h)
 
-        if score > 0:
-            results.append(format_coin(coin, score, c1h, c24h))
+            if score > 0:
+                results.append(format_coin(coin, score, c1h, c24h))
 
-    results.sort(key=lambda x: x["probability"], reverse=True)
-    limit = 5 if mode == "balanced" else 3
-    return results[:limit]
+        results.sort(key=lambda x: x["probability"], reverse=True)
+        limit = 5 if mode == "balanced" else 3
+        return results[:limit]
+
+    except Exception:
+        return []
 
 
 @app.get("/ranking/down")
 def ranking_down(mode: str = Query("balanced")):
-    data = fetch_market_data()
-    results = []
+    try:
+        data = fetch_market_data()
+        results = []
 
-    for coin in data:
-        c1h = coin.get("price_change_percentage_1h_in_currency") or 0
-        c24h = coin.get("price_change_percentage_24h_in_currency") or 0
-        score = compute_short_term_score(c1h, c24h)
+        for coin in data:
+            c1h = safe_float(coin.get("price_change_percentage_1h_in_currency"))
+            c24h = safe_float(coin.get("price_change_percentage_24h_in_currency"))
+            score = compute_short_term_score(c1h, c24h)
 
-        if score < 0:
-            results.append(format_coin(coin, score, c1h, c24h))
+            if score < 0:
+                results.append(format_coin(coin, score, c1h, c24h))
 
-    results.sort(key=lambda x: x["probability"], reverse=True)
-    limit = 5 if mode == "balanced" else 3
-    return results[:limit]
+        results.sort(key=lambda x: x["probability"], reverse=True)
+        limit = 5 if mode == "balanced" else 3
+        return results[:limit]
+
+    except Exception:
+        return []
