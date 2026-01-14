@@ -1,47 +1,44 @@
-from fastapi import APIRouter, Query
-from typing import List, Dict
-from app.datasources import get_crypto_data
-from app.indicators import compute_probability
-import random
+from typing import Dict, List
+from .datasources import fetch_binance
+from .indicators import compute_score
 
-router = APIRouter(prefix="/ranking", tags=["ranking"])
-
-
-def build_chart_data(change_24h: float) -> List[float]:
-    # sparkline sintetica coerente (NO CoinGecko)
-    base = max(min(change_24h / 10, 5), -5)
-    return [round(base + random.uniform(-0.5, 0.5), 2) for _ in range(20)]
-
-
-def build_payload(coin: Dict) -> Dict:
-    probability = compute_probability(coin["change_24h"])
+def normalize(symbol_data: Dict) -> Dict:
+    change_24h = float(symbol_data.get("priceChangePercent", 0))
     return {
-        "symbol": coin["symbol"],
-        "name": coin.get("name", coin["symbol"]),
-        "price_change_24h": round(coin["change_24h"], 2),
-        "probability": probability,
+        "symbol": symbol_data.get("symbol"),
+        "name": symbol_data.get("symbol"),
+        "price_change_24h": round(change_24h, 2),
+        "probability": min(95, abs(change_24h) * 2),
         "explanation": "Relative momentum vs market average (Binance)",
-        "chart_data": build_chart_data(coin["change_24h"]),
+        "score": compute_score(change_24h),
+        "chart_data": [
+            round(change_24h * f, 2) for f in [0.2, 0.4, 0.6, 0.8, 1]
+        ]
     }
 
+def build_state(profile: str) -> Dict:
+    data = fetch_binance()
 
-@router.get("/state")
-def ranking_state(profile: str = Query("balanced")):
-    data = get_crypto_data()
+    if not data:
+        return {
+            "last_valid_up": [],
+            "last_valid_down": []
+        }
+
+    coins = [normalize(c) for c in data if "USDT" in c.get("symbol", "")]
 
     up = sorted(
-        [c for c in data if c["change_24h"] > 0],
-        key=lambda x: x["change_24h"],
-        reverse=True,
+        [c for c in coins if c["price_change_24h"] > 0],
+        key=lambda x: x["score"],
+        reverse=True
     )[:5]
 
     down = sorted(
-        [c for c in data if c["change_24h"] < 0],
-        key=lambda x: x["change_24h"],
+        [c for c in coins if c["price_change_24h"] < 0],
+        key=lambda x: x["score"]
     )[:5]
 
     return {
-        "profile": profile,
-        "last_valid_up": [build_payload(c) for c in up],
-        "last_valid_down": [build_payload(c) for c in down],
+        "last_valid_up": up,
+        "last_valid_down": down
     }
