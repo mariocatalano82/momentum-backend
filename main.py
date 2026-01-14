@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import get_top_up, get_top_down
@@ -17,9 +17,9 @@ def healthz():
     return {"ok": True}
 
 @app.get("/ranking/up")
-def ranking_up():
-    return get_top_up()
+def ranking_up(profile: str = Query("balanced")):
+    return get_top_up(profile)
 
 @app.get("/ranking/down")
-def ranking_down():
-    return get_top_down()
+def ranking_down(profile: str = Query("balanced")):
+    return get_top_down(profile)
