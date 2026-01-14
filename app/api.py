@@ -1,69 +1,82 @@
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
+import requests
 import time
-import datasources
-import indicators
-import config
+from typing import List, Dict
 
-app = FastAPI()
+BINANCE_API = "https://api.binance.com/api/v3/ticker/24hr"
+CACHE_TTL = 120
 
-# Permette a Flutter di comunicare con il server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_last_fetch = 0.0
+_cached_up: List[Dict] = []
+_cached_down: List[Dict] = []
 
-def get_prediction_data(profile="balanced"):
-    try:
-        raw_coins = datasources.get_top_50()
-        results = []
-        
-        # Applichiamo i pesi dal file config.py
-        w = config.WEIGHTS
-        if profile == "aggressive":
-            w = {"momentum": 0.5, "volume": 0.2, "rsi": 0.1, "trend": 0.1, "volatility": 0.1}
 
-        for c in raw_coins:
-            c_1h = c.get('price_change_percentage_1h_in_currency', 0) or 0
-            c_24h = c.get('price_change_percentage_24h_in_currency', 0) or 0
-            vol = c.get('total_volume', 0) or 0
-            
-            # Calcolo degli indicatori basato sui tuoi file .py
-            m_score = indicators.momentum(c_1h)
-            v_score = indicators.volume_score(vol)
-            t_score = indicators.trend_score(c_1h)
-            
-            # Punteggio finale normalizzato
-            score = (m_score * w['momentum']) + (v_score * w['volume']) + (t_score * w['trend'])
-            confidence = min(abs(score) * 100, 98.5) # Limite massimo realistico
+def fetch_binance_data() -> List[Dict]:
+    response = requests.get(BINANCE_API, timeout=10)
+    response.raise_for_status()
+    data = response.json()
 
-            results.append({
-                "symbol": c['symbol'].upper(),
-                "name": c['name'],
-                "price": c['current_price'],
-                "change_1h": round(c_1h, 2),
-                "change_24h": round(c_24h, 2),
-                "probability": round(confidence, 1),
-                "explanation": f"Basato su momentum ({round(m_score,2)}) e volumi. Trend 1h vs 24h indica una potenziale accelerazione.",
-                "score": score
+    coins = []
+    for item in data:
+        symbol = item.get("symbol", "")
+        if (
+            symbol.endswith("USDT")
+            and not any(x in symbol for x in ["UP", "DOWN", "BULL", "BEAR"])
+        ):
+            coins.append({
+                "symbol": symbol.replace("USDT", ""),
+                "change_24h": float(item.get("priceChangePercent", 0.0)),
             })
-        
-        # Ordiniamo per trovare le Top 5 Up e Down
-        top_up = sorted(results, key=lambda x: x['score'], reverse=True)[:5]
-        top_down = sorted(results, key=lambda x: x['score'])[:5]
-        return top_up, top_down
-    except Exception as e:
-        print(f"Errore: {e}")
-        return [], []
+    return coins
 
-@app.get("/ranking/state")
-def get_state(profile: str = "balanced"):
-    up, down = get_prediction_data(profile)
+
+def build_payload(coin: Dict) -> Dict:
+    change_24h = coin["change_24h"]
+    change_1h = round(change_24h / 4, 2)
+    probability = round(min(90, max(30, abs(change_24h) * 2.1)), 2)
+
     return {
-        "market_state": "active" if len(up) > 0 else "neutral",
-        "last_valid_up": up,
-        "last_valid_down": down,
-        "last_update": time.time()
+        "symbol": coin["symbol"],
+        "name": coin["symbol"],
+        "change_1h": change_1h,
+        "change_24h": round(change_24h, 2),
+        "probability": probability,
+        "explanation_simple": (
+            "Relative short-term strength"
+            if change_24h > 0
+            else "Relative short-term weakness"
+        ),
+        "explanation_technical": "Relative momentum vs market average (Binance)",
+        "score": round(change_24h, 3),
     }
+
+
+def refresh_cache_safe():
+    global _last_fetch, _cached_up, _cached_down
+
+    now = time.time()
+    if now - _last_fetch < CACHE_TTL:
+        return
+
+    try:
+        data = fetch_binance_data()
+        data.sort(key=lambda x: x["change_24h"], reverse=True)
+
+        ups = [build_payload(c) for c in data if c["change_24h"] > 0][:5]
+        downs = [build_payload(c) for c in data if c["change_24h"] < 0][-5:]
+
+        if ups:
+            _cached_up = ups
+        if downs:
+            _cached_down = downs
+
+        _last_fetch = now
+    except Exception:
+        pass
+
+
+def get_cached_up() -> List[Dict]:
+    return _cached_up or []
+
+
+def get_cached_down() -> List[Dict]:
+    return _cached_down or []
