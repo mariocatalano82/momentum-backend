@@ -1,15 +1,10 @@
 from fastapi import FastAPI
-from app.api import build_state
+from app.api import router
 
-app = FastAPI()
+app = FastAPI(title="Momentum Backend")
 
-@app.get("/ranking/state")
-def ranking_state(profile: str = "balanced"):
-    try:
-        return build_state(profile)
-    except Exception as e:
-        print("STATE ERROR:", e)
-        return {
-            "last_valid_up": [],
-            "last_valid_down": []
-        }
+app.include_router(router)
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
