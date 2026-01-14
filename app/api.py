@@ -1,33 +1,47 @@
-from typing import Dict, List
-from app.datasources import get_market_snapshot
-from app.indicators import compute_probability, compute_acceleration
+from fastapi import APIRouter, Query
+from typing import List, Dict
+from app.datasources import get_crypto_data
+from app.indicators import compute_probability
+import random
 
-def enrich_coin(coin: Dict, profile: str) -> Dict:
-    prob = compute_probability(coin, profile)
-    accel = compute_acceleration(coin)
+router = APIRouter(prefix="/ranking", tags=["ranking"])
 
-    explanation = (
-        "High probability of trend continuation in the next 2 hours."
-        if prob > 80 else
-        "Momentum weakening, consolidation likely."
-    )
 
+def build_chart_data(change_24h: float) -> List[float]:
+    # sparkline sintetica coerente (NO CoinGecko)
+    base = max(min(change_24h / 10, 5), -5)
+    return [round(base + random.uniform(-0.5, 0.5), 2) for _ in range(20)]
+
+
+def build_payload(coin: Dict) -> Dict:
+    probability = compute_probability(coin["change_24h"])
     return {
         "symbol": coin["symbol"],
-        "name": coin["name"],
-        "price_change_1h": coin["change_1h"],
-        "price_change_24h": coin["change_24h"],
-        "probability": round(prob, 2),
-        "acceleration": round(accel, 2),
-        "explanation": explanation,
-        "chart_data": coin.get("chart_data", []),
+        "name": coin.get("name", coin["symbol"]),
+        "price_change_24h": round(coin["change_24h"], 2),
+        "probability": probability,
+        "explanation": "Relative momentum vs market average (Binance)",
+        "chart_data": build_chart_data(coin["change_24h"]),
     }
 
-def build_market_state(profile: str) -> Dict:
-    up, down = get_market_snapshot()
+
+@router.get("/state")
+def ranking_state(profile: str = Query("balanced")):
+    data = get_crypto_data()
+
+    up = sorted(
+        [c for c in data if c["change_24h"] > 0],
+        key=lambda x: x["change_24h"],
+        reverse=True,
+    )[:5]
+
+    down = sorted(
+        [c for c in data if c["change_24h"] < 0],
+        key=lambda x: x["change_24h"],
+    )[:5]
 
     return {
         "profile": profile,
-        "last_valid_up": [enrich_coin(c, profile) for c in up],
-        "last_valid_down": [enrich_coin(c, profile) for c in down],
+        "last_valid_up": [build_payload(c) for c in up],
+        "last_valid_down": [build_payload(c) for c in down],
     }

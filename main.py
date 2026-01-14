@@ -1,12 +1,10 @@
-from fastapi import FastAPI, Query
-from app.api import build_market_state
+from fastapi import FastAPI
+from app.api import router as api_router
 
 app = FastAPI(title="Momentum Backend")
 
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
+app.include_router(api_router)
 
-@app.get("/ranking/state")
-def ranking_state(profile: str = Query("balanced", regex="^(balanced|aggressive)$")):
-    return build_market_state(profile)
+@app.get("/")
+def root():
+    return {"status": "ok"}
