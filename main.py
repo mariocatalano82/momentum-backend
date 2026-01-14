@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import time
 from typing import List, Dict
 
-from api import refresh_cache_safe, get_cached_up, get_cached_down
+from app.api import refresh_cache_safe, get_cached_up, get_cached_down
 
 app = FastAPI()
 
