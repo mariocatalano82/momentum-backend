@@ -2,7 +2,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import time
 import math
-from app import datasources
+from app.datasources import get_crypto_data
 
 app = FastAPI()
 
@@ -25,7 +25,6 @@ def momentum_score(c, profile):
     change_1h = change_24h / 4
     volume = c.get("volume", 1)
 
-    # pesi
     if profile == "aggressive":
         w24, w1, wv = 1.2, 1.5, 0.4
     else:
@@ -56,7 +55,7 @@ def refresh(profile):
     if now - _last_fetch < CACHE_TTL:
         return
 
-    raw = datasources.get_crypto_data()
+    raw = get_crypto_data()
     results = []
 
     for c in raw:
