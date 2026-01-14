@@ -1,32 +1,16 @@
-import requests
-import time
-from typing import List, Dict
+from app.datasources import get_crypto_data
 
-BINANCE_API = "https://api.binance.com/api/v3/ticker/24hr"
-CACHE_TTL = 120
+def get_top_up():
+    data = get_crypto_data()
+    up = [c for c in data if c["change_24h"] > 0]
+    up.sort(key=lambda x: x["change_24h"], reverse=True)
+    return up[:5]
 
-_last_fetch = 0.0
-_cached_up: List[Dict] = []
-_cached_down: List[Dict] = []
-
-
-def fetch_binance_data() -> List[Dict]:
-    response = requests.get(BINANCE_API, timeout=10)
-    response.raise_for_status()
-    data = response.json()
-
-    coins = []
-    for item in data:
-        symbol = item.get("symbol", "")
-        if (
-            symbol.endswith("USDT")
-            and not any(x in symbol for x in ["UP", "DOWN", "BULL", "BEAR"])
-        ):
-            coins.append({
-                "symbol": symbol.replace("USDT", ""),
-                "change_24h": float(item.get("priceChangePercent", 0.0)),
-            })
-    return coins
+def get_top_down():
+    data = get_crypto_data()
+    down = [c for c in data if c["change_24h"] < 0]
+    down.sort(key=lambda x: x["change_24h"])
+    return down[:5]
 
 
 def build_payload(coin: Dict) -> Dict:
