@@ -1,25 +1,12 @@
 from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-
-from app.api import get_top_up, get_top_down
+from app.api import build_market_state
 
 app = FastAPI(title="Momentum Backend")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
-@app.get("/ranking/up")
-def ranking_up(profile: str = Query("balanced")):
-    return get_top_up(profile)
-
-@app.get("/ranking/down")
-def ranking_down(profile: str = Query("balanced")):
-    return get_top_down(profile)
+@app.get("/ranking/state")
+def ranking_state(profile: str = Query("balanced", regex="^(balanced|aggressive)$")):
+    return build_market_state(profile)
