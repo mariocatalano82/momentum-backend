@@ -3,55 +3,51 @@ import random
 from app.config import MAX_CONFIDENCE, MIN_CONFIDENCE
 
 def compute_confidence(change_1h, change_24h, profile):
-    # 1. Calcolo Allineamento (il trend breve conferma il lungo?)
+    # Calcolo allineamento dei trend
     same_direction = (change_1h > 0) == (change_24h > 0)
     
-    # 2. Forza Relativa (quanto spinge l'ultima ora rispetto alla media giornaliera)
-    # Un valore ideale di spinta è circa il 15-20% del movimento giornaliero in un'ora
-    hourly_intensity = abs(change_1h) / (abs(change_24h) * 0.2 + 0.1)
+    # Rapporto di intensità: quanto l'ultima ora spinge rispetto al giorno
+    # Se l'ora fa il 20% del movimento giornaliero, il momentum è fortissimo
+    intensity = abs(change_1h) / (abs(change_24h) * 0.2 + 0.1)
     
     if same_direction:
-        # Se confermato, base alta che cresce con l'intensità
-        base = 65 + (min(hourly_intensity, 1.0) * 15)
+        # Trend confermato: confidenza alta tra 68% e 88%
+        base = 68 + (min(intensity, 1.0) * 20)
     else:
-        # Se divergente, la confidenza crolla
-        base = 45 - (min(hourly_intensity, 1.0) * 10)
+        # Divergenza: il prezzo sta ritracciando. Confidenza bassa tra 40% e 55%
+        base = 55 - (min(intensity, 1.0) * 15)
 
-    # 3. Profilo Trader
     if profile == "aggressive":
-        base += 4 
+        base += 3
     
-    # Noise ridotto al minimo per stabilità (solo estetica)
-    noise = random.uniform(-0.5, 0.5)
-    confidence = base + noise
-    
-    return round(max(MIN_CONFIDENCE, min(MAX_CONFIDENCE, confidence)), 1)
+    # Stabilità del valore (noise ridotto allo 0.5%)
+    confidence = base + random.uniform(-0.5, 0.5)
+    return round(max(MIN_CONFIDENCE, min(95.0, confidence)), 1)
 
 def build_chart(change_1h):
-    # Genera 12 punti che simulano l'andamento dell'ultima ora
+    # Genera 12 punti per lo Sparkline
     points = []
-    current = 0.0
+    curr = 0.0
     step = change_1h / 12
     for i in range(12):
-        current += step + random.uniform(-0.1, 0.1)
-        points.append(round(current, 2))
+        curr += step + random.uniform(-0.1, 0.1)
+        points.append(round(curr, 2))
     return points
 
 def tech_context(change_1h, change_24h):
-    # Genera consigli specifici basati sui dati
     intensity = abs(change_1h)
-    is_bullish = change_1h > 0
+    is_up = change_1h > 0
     
-    if intensity > 2.5:
-        advice = "BREAKOUT: Volatilità estrema. Possibile estensione del trend."
-    elif intensity > 1.0:
-        advice = "MOMENTUM: Trend confermato. Buona pressione dei volumi."
+    if intensity > 2.0:
+        advice = "VOLATILITY SPIKE: Movimento impulsivo. Possibile continuazione rapida."
+    elif intensity > 0.8:
+        advice = "STEADY TREND: Momentum costante. Accumulazione in corso."
     else:
-        advice = "SIDEWAYS: Bassa volatilità. Attendere segnali di forza."
+        advice = "LOW MOMENTUM: Fase laterale. Attendere aumento dei volumi."
 
     return {
-        "bias": "BULLISH" if is_bullish else "BEARISH",
+        "bias": "BULLISH" if is_up else "BEARISH",
         "advice": advice,
-        "strength_idx": round(min(intensity * 2, 10), 1),
-        "context_summary": f"Il prezzo sta {'salendo' if is_bullish else 'scendendo'} con una variazione dell'1h che rappresenta il {round(abs(change_1h/change_24h)*100 if change_24h !=0 else 0)}% del movimento giornaliero."
+        "strength_score": round(min(intensity * 2.5, 10), 1),
+        "summary": f"Analisi 1h indica un momentum {'positivo' if is_up else 'negativo'} con forza {round(intensity, 1)}."
     }
