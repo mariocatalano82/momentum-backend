@@ -1,11 +1,28 @@
-import requests
-from config import BINANCE_BASE_URL, REQUEST_TIMEOUT
+import random
 
-def fetch_binance_tickers():
-    """
-    Fetch 24h ticker data from Binance
-    """
-    url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr"
-    res = requests.get(url, timeout=REQUEST_TIMEOUT)
-    res.raise_for_status()
-    return res.json()
+ASSETS = [
+    ("BTC", "Bitcoin"),
+    ("ETH", "Ethereum"),
+    ("SOL", "Solana"),
+    ("ADA", "Cardano"),
+    ("AVAX", "Avalanche"),
+    ("BNB", "Binance Coin"),
+    ("XRP", "Ripple"),
+    ("DOT", "Polkadot"),
+    ("LINK", "Chainlink"),
+    ("MATIC", "Polygon"),
+]
+
+def fetch_assets_snapshot():
+    assets = []
+    for symbol, name in ASSETS:
+        change_24h = random.uniform(-14, 14)
+        change_1h = change_24h * random.uniform(0.15, 0.35)
+
+        assets.append({
+            "symbol": symbol,
+            "name": name,
+            "change_1h": round(change_1h, 1),
+            "change_24h": round(change_24h, 1)
+        })
+    return assets
