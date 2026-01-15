@@ -1,46 +1,52 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.datasources import fetch_assets_snapshot
 from app.indicators import compute_confidence, build_chart, tech_context
-from app.config import TOP_N
 
-def explain(change_1h, change_24h):
-    if abs(change_1h) > abs(change_24h) * 0.4:
-        return "Momentum is accelerating with increased short-term participation."
-    if abs(change_24h) > 8:
-        return "Trend remains well established, though volatility may rise."
-    return "Momentum is present but lacks strong directional conviction."
-
+# VARIABILI DI CACHE GLOBALI
+_cache = {}
+CACHE_DURATION = timedelta(minutes=5)
 
 def build_state(profile: str):
-    assets = fetch_assets_snapshot()
-    timestamp = datetime.now(timezone.utc).isoformat()
+    global _cache
+    now = datetime.now(timezone.utc)
+    
+    # Verifica se abbiamo dati freschi in cache per questo profilo
+    if profile in _cache:
+        data, expiry = _cache[profile]
+        if now < expiry:
+            return data
 
+    assets = fetch_assets_snapshot()
     enriched = []
+    
     for a in assets:
         conf = compute_confidence(a["change_1h"], a["change_24h"], profile)
-
         enriched.append({
             "symbol": a["symbol"],
             "name": a["name"],
             "change_1h": a["change_1h"],
             "change_24h": a["change_24h"],
-            "score": round(a["change_24h"], 1),
             "probability": conf,
-            "chart_data": build_chart(a["change_1h"]),
             "explanation": explain(a["change_1h"], a["change_24h"]),
-            "tech": tech_context(a["change_1h"], a["change_24h"]),
+            "chart_data": build_chart(a["change_1h"]),
+            "tech": tech_context(a["change_1h"], a["change_24h"])
         })
 
-    up = sorted([a for a in enriched if a["change_24h"] >= 0],
-                key=lambda x: x["score"], reverse=True)[:TOP_N]
+    up = sorted([x for x in enriched if x["change_24h"] >= 0], key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
+    down = sorted([x for x in enriched if x["change_24h"] < 0], key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
 
-    down = sorted([a for a in enriched if a["change_24h"] < 0],
-                  key=lambda x: x["score"])[:TOP_N]
-
-    return {
+    result = {
         "profile": profile,
-        "fallback": False,
-        "timestamp": timestamp,
+        "timestamp": now.isoformat(),
         "last_valid_up": up,
         "last_valid_down": down
     }
+    
+    # Aggiorna la cache
+    _cache[profile] = (result, now + CACHE_DURATION)
+    return result
+
+def explain(c1h, c24h):
+    if abs(c1h) > abs(c24h) * 0.4: return "Forte spinta nell'ultima ora."
+    if abs(c24h) > 8: return "Trend consolidato nelle 24h."
+    return "Movimento moderato."
