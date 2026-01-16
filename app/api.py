@@ -1,52 +1,54 @@
-from datetime import datetime, timezone, timedelta
-from app.datasources import fetch_assets_snapshot
-from app.indicators import compute_confidence, build_chart, tech_context
+import json
+import os
 
-# VARIABILI DI CACHE GLOBALI
-_cache = {}
-CACHE_DURATION = timedelta(minutes=5)
+# Database "leggero" su file per persistenza reale tra i riavvii del server
+DB_FILE = "last_valid_state.json"
+
+def save_to_disk(state):
+    with open(DB_FILE, "w") as f:
+        json.dump(state, f)
+
+def load_from_disk():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    return None
 
 def build_state(profile: str):
-    global _cache
-    now = datetime.now(timezone.utc)
-    
-    # Verifica se abbiamo dati freschi in cache per questo profilo
-    if profile in _cache:
-        data, expiry = _cache[profile]
-        if now < expiry:
-            return data
-
+    now_ts = datetime.now().isoformat()
     assets = fetch_assets_snapshot()
-    enriched = []
     
-    for a in assets:
-        conf = compute_confidence(a["change_1h"], a["change_24h"], profile)
-        enriched.append({
-            "symbol": a["symbol"],
-            "name": a["name"],
-            "change_1h": a["change_1h"],
-            "change_24h": a["change_24h"],
-            "probability": conf,
-            "explanation": explain(a["change_1h"], a["change_24h"]),
-            "chart_data": build_chart(a["change_1h"]),
-            "tech": tech_context(a["change_1h"], a["change_24h"])
-        })
+    if assets:
+        # TRATTAMENTO DATI LIVE
+        enriched = []
+        for a in assets:
+            conf = compute_confidence(a["change_1h"], a["change_24h"], profile)
+            enriched.append({
+                "symbol": a["symbol"],
+                "name": a["symbol"], 
+                "change_1h": round(a["change_1h"], 2),
+                "change_24h": round(a["change_24h"], 2),
+                "probability": conf,
+                "chart_data": build_chart(a["change_1h"]),
+                "tech": tech_context(a["change_1h"], a["change_24h"])
+            })
 
-    up = sorted([x for x in enriched if x["change_24h"] >= 0], key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
-    down = sorted([x for x in enriched if x["change_24h"] < 0], key=lambda x: abs(x["change_24h"]), reverse=True)[:5]
+        up = sorted([x for x in enriched if x["change_24h"] > 0], key=lambda x: x["probability"], reverse=True)[:5]
+        down = sorted([x for x in enriched if x["change_24h"] < 0], key=lambda x: x["probability"], reverse=True)[:5]
 
-    result = {
-        "profile": profile,
-        "timestamp": now.isoformat(),
-        "last_valid_up": up,
-        "last_valid_down": down
-    }
-    
-    # Aggiorna la cache
-    _cache[profile] = (result, now + CACHE_DURATION)
-    return result
-
-def explain(c1h, c24h):
-    if abs(c1h) > abs(c24h) * 0.4: return "Forte spinta nell'ultima ora."
-    if abs(c24h) > 8: return "Trend consolidato nelle 24h."
-    return "Movimento moderato."
+        new_state = {
+            "profile": profile,
+            "timestamp": now_ts,
+            "is_live": True,
+            "last_valid_up": up,
+            "last_valid_down": down
+        }
+        save_to_disk(new_state) # Persistiamo il successo
+        return new_state
+    else:
+        # TRATTAMENTO FALLBACK PERSISTITO
+        last_state = load_from_disk()
+        if last_state:
+            last_state["is_live"] = False # Segnaliamo all'app che il dato è "vecchio"
+            return last_state
+        return {"error": "No data available"}
