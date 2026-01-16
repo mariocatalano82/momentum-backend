@@ -3,27 +3,24 @@ import hashlib
 
 def get_full_name(symbol):
     names = {
-        "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", 
-        "XRP": "Ripple", "ADA": "Cardano", "DOT": "Polkadot", 
-        "FET": "AI Artificial Intelligence", "AVAX": "Avalanche", 
-        "LINK": "Chainlink", "MATIC": "Polygon", "NEAR": "Near Protocol", 
-        "TIA": "Celestia", "PEPE": "Pepe Coin", "INJ": "Injective", "SUI": "Sui Network"
+        "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "Ripple", 
+        "ADA": "Cardano", "DOT": "Polkadot", "FET": "Artificial Intelligence", 
+        "AVAX": "Avalanche", "LINK": "Chainlink", "MATIC": "Polygon", 
+        "NEAR": "Near Protocol", "TIA": "Celestia", "PEPE": "Pepe Coin", 
+        "INJ": "Injective", "SUI": "Sui Network"
     }
     return names.get(symbol, symbol)
 
 def compute_confidence(change_1h, change_24h, symbol):
-    # Calcolo intensità vs media oraria
     hourly_avg = abs(change_24h) / 24
     intensity = abs(change_1h) / (hourly_avg + 0.01)
     is_up = change_1h > 0
     
-    # Algoritmo di confidenza basato sul trend-coupling
     if (change_1h > 0) == (change_24h > 0):
         base = 55 + (min(intensity, 10) * 4)
     else:
         base = 40 + (min(intensity, 10) * 5)
     
-    # Hash-noise per precisione statistica dei decimali
     hash_val = int(hashlib.md5(symbol.encode()).hexdigest(), 16)
     noise = ((hash_val % 100) / 100 * 1.5) - 0.75
     prob = round(max(15.0, min(99.4, base + noise)), 1)
@@ -36,5 +33,4 @@ def compute_confidence(change_1h, change_24h, symbol):
     }
 
 def build_chart(change_1h):
-    # Genera curva momentum realistica per lo sparkline
     return [round(change_1h * (math.log(i + 1) / math.log(13)), 3) for i in range(12)]
