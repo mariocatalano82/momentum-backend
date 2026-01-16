@@ -6,7 +6,7 @@ def get_deterministic_noise(symbol):
     return ((hash_val % 100) / 100 * 0.6) - 0.3
 
 def compute_confidence(change_1h, change_24h, profile, symbol):
-    # Analisi della solidità: convergenza tra trend micro e macro
+    # Analisi della convergenza tra trend micro e macro per solidità statistica
     avg_hourly_24h = change_24h / 24
     intensity_ratio = abs(change_1h) / (abs(avg_hourly_24h) + 0.1)
     is_convergent = (change_1h > 0) == (change_24h > 0)
@@ -23,6 +23,7 @@ def compute_confidence(change_1h, change_24h, profile, symbol):
     return round(max(35.0, min(97.5, final_conf)), 1)
 
 def build_chart(change_1h):
+    # Genera la curva del momentum orario per lo sparkline
     points = []
     for i in range(12):
         t = i / 11
@@ -31,16 +32,17 @@ def build_chart(change_1h):
     return points
 
 def tech_context(change_1h, change_24h):
+    # Analisi obiettiva per il trader
     ratio = abs(change_1h) / (abs(change_24h/24) + 0.1)
     
     if ratio > 2.5:
-        advice = "FORTE ACCELERAZIONE: Il momentum orario domina il trend giornaliero. Elevata probabilità di estensione del movimento nelle prossime 2h."
+        advice = "FORTE ACCELERAZIONE: Il momentum orario domina il trend giornaliero. Alta probabilità di estensione nelle prossime 2h."
         score = 8.8
     elif ratio > 1.0:
-        advice = "TREND COSTANTE: Il movimento attuale è supportato da volumi regolari. Struttura solida per il mantenimento della posizione."
+        advice = "TREND COSTANTE: Movimento supportato da volumi regolari. Struttura solida per il mantenimento."
         score = 6.5
     else:
-        advice = "CONSOLIDAMENTO: Momentum orario inferiore alla media giornaliera. Possibile fase laterale o compressione di volatilità."
+        advice = "CONSOLIDAMENTO: Momentum orario inferiore alla media giornaliera. Possibile fase laterale."
         score = 4.2
 
     return {
