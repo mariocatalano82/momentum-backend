@@ -1,46 +1,50 @@
-import math
 import hashlib
+from datetime import datetime
+from app.config import CONFIDENCE_MIN, CONFIDENCE_MAX, PROFILES
 
-def get_deterministic_noise(symbol):
-    hash_val = int(hashlib.md5(symbol.encode()).hexdigest(), 16)
-    return ((hash_val % 100) / 100 * 0.8) - 0.4
 
-def compute_confidence(change_1h, change_24h, profile, symbol):
-    # Calcolo dell'intensità: quanto l'ora attuale devia dalla media oraria 24h
-    avg_hourly = abs(change_24h) / 24
-    intensity = abs(change_1h) / (avg_hourly + 0.05)
-    
-    # Sigmoide per mappare il momentum in una probabilità reale
-    is_convergent = (change_1h > 0) == (change_24h > 0)
-    
-    if is_convergent:
-        # Trend solido: la confidenza cresce con l'accelerazione
-        base = 68 + (min(intensity, 5) * 5.5)
-    else:
-        # Contro-trend: punteggio più basso e cauto
-        base = 42 + (min(intensity, 4) * 7)
+def _deterministic_seed(symbol: str) -> float:
+    h = hashlib.md5(symbol.encode()).hexdigest()
+    return (int(h[:8], 16) % 1000) / 1000.0
 
-    if profile == "aggressive": base += 3.5
 
-    final_conf = base + get_deterministic_noise(symbol)
-    return round(max(35.0, min(98.5, final_conf)), 1)
+def compute_confidence(change_1h, change_24h, profile):
+    profile_cfg = PROFILES.get(profile, PROFILES["balanced"])
+
+    alignment = abs(change_1h / change_24h) if change_24h != 0 else 0
+    base = 50 + min(alignment * 30, 30)
+
+    seed = _deterministic_seed(str(change_1h) + str(change_24h))
+    noise = (seed - 0.5) * 10
+
+    conf = base + noise + profile_cfg["confidence_bias"]
+    return round(max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, conf)), 1)
+
 
 def build_chart(change_1h):
-    # Proiezione 2h con decadimento logaritmico
-    return [round(change_1h * (1.1 * math.sin((i/11) * 1.6)), 3) for i in range(12)]
+    step = change_1h / 12 if change_1h != 0 else 0
+    return [round(step * i, 2) for i in range(1, 13)]
+
 
 def tech_context(change_1h, change_24h):
-    avg = abs(change_24h) / 24
-    ratio = abs(change_1h) / (avg + 0.05)
-    
-    if ratio > 2.8:
-        advice = "MOMENTUM BURST: High-velocity decoupling detected. Asset is outperforming daily volatility norms."
-        score = round(min(9.8, 7.0 + ratio), 1)
-    elif ratio > 1.2:
-        advice = "SUSTAINED TREND: Momentum is healthy and supported by consistent volume flows."
-        score = round(min(8.5, 5.5 + ratio), 1)
-    else:
-        advice = "LOW CONVICTION: Momentum is fading or consolidating. Expect range-bound movement."
-        score = 4.2
-        
-    return {"advice": advice, "score": score, "ratio": round(ratio, 2)}
+    bias = "bullish" if change_24h > 0 else "bearish"
+
+    strength = (
+        "strong" if abs(change_24h) > 10 else
+        "moderate" if abs(change_24h) > 5 else
+        "weak"
+    )
+
+    outlook = (
+        "Continuation likely if momentum holds."
+        if abs(change_1h) > abs(change_24h) * 0.1
+        else "Momentum fragile, watch for slowdown."
+    )
+
+    return {
+        "bias": bias,
+        "trend_strength": strength,
+        "momentum_state": "stable",
+        "risk_level": "medium",
+        "outlook_2h": outlook
+    }
