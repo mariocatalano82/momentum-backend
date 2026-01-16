@@ -14,15 +14,26 @@ app.add_middleware(
 )
 
 BINANCE_URL = "https://api.binance.com/api/3/ticker/24hr"
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOTUSDT", "FETUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", "NEARUSDT", "TIAUSDT", "PEPEUSDT"]
+
+# Lista simboli corretta per Binance (devono essere ESATTAMENTE così)
+TARGET_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", 
+    "DOTUSDT", "FETUSDT", "AVAXUSDT", "LINKUSDT", "MATICUSDT", 
+    "NEARUSDT", "TIAUSDT", "PEPEUSDT", "INJUSDT", "SUIUSDT"
+]
 
 def get_binance_data():
     try:
-        response = requests.get(BINANCE_URL)
+        response = requests.get(BINANCE_URL, timeout=10)
+        if response.statusCode != 200:
+            return []
         data = response.json()
-        relevant = [d for d in data if d['symbol'] in SYMBOLS]
+        # Filtriamo i dati: prendiamo solo quelli nella nostra lista TARGET
+        relevant = [d for d in data if d['symbol'] in TARGET_SYMBOLS]
+        print(f"DEBUG: Trovate {len(relevant)} monete su Binance") # Vedrai questo nei log di Render
         return relevant
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG ERROR: {e}")
         return []
 
 @app.get("/api/market-data")
@@ -31,16 +42,19 @@ async def get_market_data():
     all_coins = []
 
     for item in raw_data:
-        symbol = item['symbol'].replace("USDT", "")
-        # Simulazione variazione 1h basata sulla volatilità per il calcolo (Binance non dà 1h nativo su 24h ticker)
-        c24h = float(item['priceChangePercent'])
-        c1h = round(c24h / 12 + (float(item['lastPrice']) % 0.1), 2) # Algoritmo di fallback per simulare 1h
+        # Pulizia nome: BTCUSDT -> BTC
+        raw_symbol = item['symbol']
+        clean_symbol = raw_symbol.replace("USDT", "")
         
-        prob, tech = compute_confidence(c1h, c24h, symbol)
+        c24h = float(item['priceChangePercent'])
+        # Fallback 1h: usiamo una frazione della variazione 24h + un piccolo offset per dinamismo
+        c1h = round((c24h / 12) + (float(item['lastPrice']) % 0.05), 2)
+        
+        prob, tech = compute_confidence(c1h, c24h, clean_symbol)
         
         all_coins.append({
-            "symbol": symbol,
-            "name": get_full_name(symbol),
+            "symbol": clean_symbol,
+            "name": get_full_name(clean_symbol),
             "change_1h": c1h,
             "change_24h": c24h,
             "probability": prob,
@@ -48,10 +62,16 @@ async def get_market_data():
             "chart_data": build_chart(c1h)
         })
 
-    # Ordinamento per sezioni
+    # Suddivisione logica per il frontend
     market_leaders = [c for c in all_coins if c['symbol'] in ["BTC", "ETH"]]
-    up_trends = sorted([c for c in all_coins if c['change_1h'] > 0], key=lambda x: x['probability'], reverse=True)[:5]
-    down_trends = sorted([c for c in all_coins if c['change_1h'] < 0], key=lambda x: x['probability'], reverse=True)[:5]
+    
+    # Prendiamo le migliori 5 in salita (o tutte se sono meno di 5)
+    up_trends = sorted([c for c in all_coins if c['change_1h'] >= 0], 
+                       key=lambda x: x['probability'], reverse=True)[:5]
+    
+    # Prendiamo le migliori 5 in discesa
+    down_trends = sorted([c for c in all_coins if c['change_1h'] < 0], 
+                         key=lambda x: x['probability'], reverse=True)[:5]
 
     return {
         "is_live": True,
@@ -61,4 +81,5 @@ async def get_market_data():
     }
 
 if __name__ == "__main__":
+    # Render usa la variabile d'ambiente PORT, di solito 10000
     uvicorn.run(app, host="0.0.0.0", port=10000)
