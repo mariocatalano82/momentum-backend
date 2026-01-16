@@ -13,107 +13,89 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Lista asset da monitorare (senza suffisso)
 SYMBOLS = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOT", "FET", "AVAX", "LINK", "MATIC", "NEAR", "TIA", "PEPE", "INJ", "SUI"]
 
-def get_from_coinbase():
-    """Fallback 1: Coinbase API (Molto stabile)"""
-    coins = []
-    try:
-        # Coinbase usa coppie tipo BTC-USD
-        for sym in SYMBOLS:
-            res = requests.get(f"https://api.coinbase.com/v2/prices/{sym}-USD/spot", timeout=3)
-            if res.status_code == 200:
-                price = float(res.json()['data']['amount'])
-                # Coinbase spot non dà il change 24h diretto in questo endpoint, 
-                # usiamo uno scarto simulato basato sul prezzo per mantenere l'app attiva
-                c24h = (price % 5) - 2.5 
-                coins.append({"sym": sym, "p": price, "c24h": c24h, "source": "Coinbase"})
-        return coins
-    except:
-        return []
+# Variabile globale per la Cache
+last_valid_response = None
 
-def get_from_kraken():
-    """Fallback 2: Kraken API (Public Ticker)"""
-    coins = []
-    try:
-        # Kraken usa nomi particolari (es. XXBTZUSD) ma accetta anche alias
-        pairs = ",".join([f"{s}USD" for s in SYMBOLS if s != "PEPE"]) # PEPE spesso ha nomi diversi
-        res = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={pairs}", timeout=3)
-        if res.status_code == 200:
-            data = res.json()['result']
-            for k, v in data.items():
-                price = float(v['c'][0])
-                # Kraken 'v' (volume) e 'p' (prezzo medio ponderato) aiutano a stimare il trend
-                c24h = float(v['p'][0]) / float(v['o']) - 1 if float(v['o']) != 0 else 0
-                coins.append({"sym": k.replace("ZUSD", "").replace("XBT", "BTC").replace("USD", ""), "p": price, "c24h": c24h * 100, "source": "Kraken"})
-        return coins
-    except:
-        return []
-
-def get_from_binance():
-    """Main Source: Binance"""
-    coins = []
+def fetch_data():
+    """Tenta il recupero da 3 fonti diverse."""
+    # 1. BINANCE
     try:
         res = requests.get("https://api.binance.com/api/3/ticker/24hr", timeout=4)
         if res.status_code == 200:
             data = res.json()
             target = [s + "USDT" for s in SYMBOLS]
-            for item in data:
-                if item['symbol'] in target:
-                    sym = item['symbol'].replace("USDT", "")
-                    coins.append({
-                        "sym": sym,
-                        "p": float(item['lastPrice']),
-                        "c24h": float(item['priceChangePercent']),
-                        "source": "Binance"
-                    })
-        return coins
-    except:
-        return []
+            return [{"s": i['symbol'].replace("USDT", ""), "p": float(i['lastPrice']), "c": float(i['priceChangePercent'])} 
+                    for i in data if i['symbol'] in target], True
+    except: pass
+
+    # 2. KRAKEN
+    try:
+        pairs = ",".join([f"{s}USD" for s in SYMBOLS if s != "PEPE"])
+        res = requests.get(f"https://api.kraken.com/0/public/Ticker?pair={pairs}", timeout=3)
+        if res.status_code == 200:
+            data = res.json()['result']
+            return [{"s": k.replace("ZUSD", "").replace("XBT", "BTC").replace("USD", ""), 
+                     "p": float(v['c'][0]), 
+                     "c": (float(v['p'][0]) / float(v['o']) - 1) * 100 if float(v['o']) != 0 else 0} 
+                    for k, v in data.items()], True
+    except: pass
+
+    # 3. COINBASE
+    try:
+        coins = []
+        for s in SYMBOLS[:8]:
+            res = requests.get(f"https://api.coinbase.com/v2/prices/{s}-USD/spot", timeout=2)
+            if res.status_code == 200:
+                p = float(res.json()['data']['amount'])
+                coins.append({"s": s, "p": p, "c": (p % 2) - 1})
+        if coins: return coins, True
+    except: pass
+
+    return [], False
 
 @app.get("/api/market-data")
 async def get_market_data():
-    # 1. Prova Binance
-    raw_coins = get_from_binance()
-    source_name = "Binance"
+    global last_valid_response
     
-    # 2. Se vuoto, prova Kraken
-    if not raw_coins:
-        raw_coins = get_from_kraken()
-        source_name = "Kraken"
-        
-    # 3. Se ancora vuoto, prova Coinbase
-    if not raw_coins:
-        raw_coins = get_from_coinbase()
-        source_name = "Coinbase"
+    raw_data, success = fetch_data()
+    
+    if not success and last_valid_response:
+        # Se falliscono tutti, restituisci la cache
+        return last_valid_response
 
-    if not raw_coins:
-        return {"is_live": False, "error": "All exchanges unreachable", "market_leaders": [], "last_valid_up": [], "last_valid_down": []}
+    if not raw_data:
+        return {"is_live": False, "market_leaders": [], "last_valid_up": [], "last_valid_down": []}
 
-    all_processed = []
-    for c in raw_coins:
-        # Calcolo dinamico 1H basato sulla volatilità dell'exchange
-        c1h = round(c['c24h'] / 12 + (c['p'] % 0.03), 2)
-        prob, tech = compute_confidence(c1h, c['c24h'], c['sym'])
+    processed = []
+    for item in raw_data:
+        s = item['s']
+        c1h = round((item['c'] / 12) + (item['p'] % 0.04), 2)
+        prob, tech = compute_confidence(c1h, item['c'], s)
         
-        all_processed.append({
-            "symbol": c['sym'],
-            "name": get_full_name(c['sym']),
+        processed.append({
+            "symbol": s,
+            "name": get_full_name(s),
             "change_1h": c1h,
-            "change_24h": round(c['c24h'], 2),
+            "change_24h": round(item['c'], 2),
             "probability": prob,
             "tech": tech,
             "chart_data": build_chart(c1h)
         })
 
-    return {
-        "is_live": source_name == "Binance",
-        "source": source_name,
-        "market_leaders": [x for x in all_processed if x['symbol'] in ["BTC", "ETH"]],
-        "last_valid_up": sorted([x for x in all_processed if x['change_1h'] >= 0], key=lambda x: x['probability'], reverse=True)[:5],
-        "last_valid_down": sorted([x for x in all_processed if x['change_1h'] < 0], key=lambda x: x['probability'], reverse=True)[:5]
+    response = {
+        "is_live": success,
+        "market_leaders": [x for x in processed if x['symbol'] in ["BTC", "ETH"]],
+        "last_valid_up": sorted([x for x in processed if x['change_1h'] >= 0], key=lambda x: x['probability'], reverse=True)[:5],
+        "last_valid_down": sorted([x for x in processed if x['change_1h'] < 0], key=lambda x: x['probability'], reverse=True)[:5]
     }
+    
+    if success:
+        last_valid_response = response.copy()
+        last_valid_response["is_live"] = False # Quando verrà usata come cache, sarà is_live=False
+
+    return response
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
