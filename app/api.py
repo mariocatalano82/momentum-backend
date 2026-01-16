@@ -9,29 +9,25 @@ DB_FILE = "last_valid_state.json"
 def build_state(profile: str):
     all_assets = fetch_assets_snapshot()
     
-    # Gestione Offline / Fallback
     if not all_assets:
         if os.path.exists(DB_FILE):
-            try:
-                with open(DB_FILE, "r") as f:
-                    state = json.load(f)
-                    state["is_live"] = False
-                    return state
-            except: pass
+            with open(DB_FILE, "r") as f:
+                state = json.load(f)
+                state["is_live"] = False
+                return state
         return {"error": "No data", "is_live": False}
 
     MAJORS = ["BTC", "ETH", "SOL", "BNB", "XRP"]
     enriched = []
     
     for a in all_assets:
-        # Calcoli Core
         conf = compute_confidence(a["change_1h"], a["change_24h"], profile, a["symbol"])
         chart = build_chart(a["change_1h"])
-        tech = tech_context(a["change_1h"], a["change_24h"])
+        # Passiamo anche il symbol per personalizzare il testo friendly
+        tech = tech_context(a["change_1h"], a["change_24h"], a["symbol"])
         
         enriched.append({
             "symbol": a["symbol"],
-            "name": a["symbol"],
             "change_1h": a["change_1h"],
             "change_24h": a["change_24h"],
             "probability": conf,
@@ -39,13 +35,10 @@ def build_state(profile: str):
             "tech": tech
         })
 
-    # Ranking Logico
     up = sorted([x for x in enriched if x["change_1h"] > 0 and x["symbol"] not in MAJORS], 
                 key=lambda x: x["probability"], reverse=True)[:5]
-    
     down = sorted([x for x in enriched if x["change_1h"] < 0 and x["symbol"] not in MAJORS], 
                   key=lambda x: x["probability"], reverse=True)[:5]
-                  
     leaders = [x for x in enriched if x["symbol"] in MAJORS]
 
     state = {
@@ -56,10 +49,7 @@ def build_state(profile: str):
         "last_valid_down": down
     }
     
-    # Cache su disco
-    try:
-        with open(DB_FILE, "w") as f:
-            json.dump(state, f)
-    except: pass
+    with open(DB_FILE, "w") as f:
+        json.dump(state, f)
         
     return state
