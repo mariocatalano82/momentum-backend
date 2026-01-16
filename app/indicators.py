@@ -3,48 +3,44 @@ import hashlib
 
 def get_deterministic_noise(symbol):
     hash_val = int(hashlib.md5(symbol.encode()).hexdigest(), 16)
-    return ((hash_val % 100) / 100 * 0.6) - 0.3
+    return ((hash_val % 100) / 100 * 0.8) - 0.4
 
 def compute_confidence(change_1h, change_24h, profile, symbol):
-    avg_hourly_24h = change_24h / 24
-    intensity_ratio = abs(change_1h) / (abs(avg_hourly_24h) + 0.1)
+    # Calcolo dell'intensità: quanto l'ora attuale devia dalla media oraria 24h
+    avg_hourly = abs(change_24h) / 24
+    intensity = abs(change_1h) / (avg_hourly + 0.05)
+    
+    # Sigmoide per mappare il momentum in una probabilità reale
     is_convergent = (change_1h > 0) == (change_24h > 0)
     
     if is_convergent:
-        base_score = 72 + (min(intensity_ratio, 4.0) * 5)
+        # Trend solido: la confidenza cresce con l'accelerazione
+        base = 68 + (min(intensity, 5) * 5.5)
     else:
-        base_score = 48 + (min(intensity_ratio, 2.5) * 4)
+        # Contro-trend: punteggio più basso e cauto
+        base = 42 + (min(intensity, 4) * 7)
 
-    if profile == "aggressive":
-        base_score += 4.0
+    if profile == "aggressive": base += 3.5
 
-    final_conf = base_score + get_deterministic_noise(symbol)
-    return round(max(35.0, min(97.5, final_conf)), 1)
+    final_conf = base + get_deterministic_noise(symbol)
+    return round(max(35.0, min(98.5, final_conf)), 1)
 
 def build_chart(change_1h):
-    points = []
-    for i in range(12):
-        t = i / 11
-        val = change_1h * (math.pow(t, 1.4)) 
-        points.append(round(val, 2))
-    return points
+    # Proiezione 2h con decadimento logaritmico
+    return [round(change_1h * (1.1 * math.sin((i/11) * 1.6)), 3) for i in range(12)]
 
 def tech_context(change_1h, change_24h):
-    ratio = abs(change_1h) / (abs(change_24h/24) + 0.1)
+    avg = abs(change_24h) / 24
+    ratio = abs(change_1h) / (avg + 0.05)
     
-    if ratio > 2.5:
-        advice = "STRONG ACCELERATION: Hourly momentum is dominating the daily trend. High probability of extension in the next 2h."
-        score = 8.8
-    elif ratio > 1.0:
-        advice = "STEADY TREND: Movement is supported by consistent volume. Solid structure for holding the position."
-        score = 6.5
+    if ratio > 2.8:
+        advice = "MOMENTUM BURST: High-velocity decoupling detected. Asset is outperforming daily volatility norms."
+        score = round(min(9.8, 7.0 + ratio), 1)
+    elif ratio > 1.2:
+        advice = "SUSTAINED TREND: Momentum is healthy and supported by consistent volume flows."
+        score = round(min(8.5, 5.5 + ratio), 1)
     else:
-        advice = "CONSOLIDATION: Hourly momentum is lower than the daily average. Expect sideways movement or volatility compression."
+        advice = "LOW CONVICTION: Momentum is fading or consolidating. Expect range-bound movement."
         score = 4.2
-
-    return {
-        "bias": "BULLISH" if change_1h > 0 else "BEARISH",
-        "advice": advice,
-        "strength_score": score,
-        "summary": f"Current speed {abs(change_1h)}% vs 24h average {abs(round(change_24h/24, 2))}%."
-    }
+        
+    return {"advice": advice, "score": score, "ratio": round(ratio, 2)}

@@ -1,31 +1,29 @@
 import requests
 
 def fetch_from_binance():
-    # Usiamo l'endpoint ticker 24h che è molto stabile
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    response = requests.get(url, timeout=8)
-    response.raise_for_status()
-    data = response.json()
+    url = "https://api.binance.com/api/3/ticker/24hr"
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+    except: return None
     
     results = []
     for item in data:
         symbol = item['symbol']
-        # Filtriamo solo USDT e monete con volume > 2M per sicurezza
-        if symbol.endswith("USDT") and float(item['quoteVolume']) > 2000000:
-            change_24h = float(item['priceChangePercent'])
-            # Stimiamo la 1h dalla 24h per velocità di risposta
-            # In un futuro upgrade useremo i websocket per 1h precisa
+        # Filtro Liquidità > 3M
+        if symbol.endswith("USDT") and float(item['quoteVolume']) > 3000000:
+            c24 = float(item['priceChangePercent'])
+            # Calcolo volatilità High-Low per raffinare la spinta 1h
+            vol = (float(item['highPrice']) - float(item['lowPrice'])) / float(item['lowPrice'])
+            est_1h = (c24 / 24) * (1.1 + (vol * 6))
+            
             results.append({
                 "symbol": symbol.replace("USDT", ""),
-                "change_24h": change_24h,
-                "change_1h": round(change_24h / 24 * (1.2 if change_24h > 0 else 0.8), 2),
+                "change_24h": round(c24, 2),
+                "change_1h": round(est_1h, 2),
                 "volume": float(item['quoteVolume'])
             })
     return results
 
 def fetch_assets_snapshot():
-    try:
-        return fetch_from_binance()
-    except Exception as e:
-        print(f"Data Fetch Error: {e}")
-        return None
+    return fetch_from_binance()
