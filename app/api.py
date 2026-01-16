@@ -21,16 +21,16 @@ def build_state(profile: str):
     enriched = []
     
     for a in all_assets:
-        conf = compute_confidence(a["change_1h"], a["change_24h"], profile, a["symbol"])
+        prob = compute_confidence(a["change_1h"], a["change_24h"], profile, a["symbol"])
         chart = build_chart(a["change_1h"])
-        # Passiamo anche il symbol per personalizzare il testo friendly
-        tech = tech_context(a["change_1h"], a["change_24h"], a["symbol"])
+        # Passiamo i parametri necessari per l'analisi oggettiva
+        tech = tech_context(a["change_1h"], a["change_24h"], a["symbol"], prob)
         
         enriched.append({
             "symbol": a["symbol"],
             "change_1h": a["change_1h"],
             "change_24h": a["change_24h"],
-            "probability": conf,
+            "probability": prob,
             "chart_data": chart,
             "tech": tech
         })
