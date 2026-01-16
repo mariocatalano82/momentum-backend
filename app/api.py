@@ -1,59 +1,65 @@
-from datetime import datetime, timezone
-from app.datasources import fetch_market_data
+import json
+import os
+from datetime import datetime
 from app.indicators import compute_confidence, build_chart, tech_context
+from app.datasources import fetch_assets_snapshot
 
-
-_LAST_VALID_STATE = None
-
+DB_FILE = "last_valid_state.json"
 
 def build_state(profile: str):
-    global _LAST_VALID_STATE
+    all_assets = fetch_assets_snapshot()
+    
+    # Gestione Offline / Fallback
+    if not all_assets:
+        if os.path.exists(DB_FILE):
+            try:
+                with open(DB_FILE, "r") as f:
+                    state = json.load(f)
+                    state["is_live"] = False
+                    return state
+            except: pass
+        return {"error": "No data", "is_live": False}
 
-    try:
-        raw, fallback = fetch_market_data()
-    except Exception:
-        if _LAST_VALID_STATE:
-            return {**_LAST_VALID_STATE, "fallback": True}
-        raise
+    MAJORS = ["BTC", "ETH", "SOL", "BNB", "XRP"]
+    enriched = []
+    
+    for a in all_assets:
+        # Calcoli Core
+        conf = compute_confidence(a["change_1h"], a["change_24h"], profile, a["symbol"])
+        chart = build_chart(a["change_1h"])
+        tech = tech_context(a["change_1h"], a["change_24h"])
+        
+        enriched.append({
+            "symbol": a["symbol"],
+            "name": a["symbol"],
+            "change_1h": a["change_1h"],
+            "change_24h": a["change_24h"],
+            "probability": conf,
+            "chart_data": chart,
+            "tech": tech
+        })
 
-    assets = []
-    for a in raw:
-        try:
-            symbol = a["symbol"]
-            name = a.get("symbol")
-            ch1 = float(a.get("priceChangePercent", 0)) / 24
-            ch24 = float(a.get("priceChangePercent", 0))
-
-            conf = compute_confidence(ch1, ch24, profile)
-
-            assets.append({
-                "symbol": symbol,
-                "name": name,
-                "change_1h": round(ch1, 1),
-                "change_24h": round(ch24, 1),
-                "score": round(ch24, 1),
-                "probability": conf,
-                "chart_data": build_chart(ch1),
-                "explanation": (
-                    "Momentum remains constructive, though volatility may rise."
-                    if conf > 55 else
-                    "Momentum is present but lacks strong conviction."
-                ),
-                "tech": tech_context(ch1, ch24)
-            })
-        except Exception:
-            continue
-
-    ups = sorted(assets, key=lambda x: x["score"], reverse=True)[:5]
-    downs = sorted(assets, key=lambda x: x["score"])[:5]
+    # Ranking Logico
+    up = sorted([x for x in enriched if x["change_1h"] > 0 and x["symbol"] not in MAJORS], 
+                key=lambda x: x["probability"], reverse=True)[:5]
+    
+    down = sorted([x for x in enriched if x["change_1h"] < 0 and x["symbol"] not in MAJORS], 
+                  key=lambda x: x["probability"], reverse=True)[:5]
+                  
+    leaders = [x for x in enriched if x["symbol"] in MAJORS]
 
     state = {
-        "profile": profile,
-        "fallback": fallback,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "last_valid_up": ups,
-        "last_valid_down": downs
+        "is_live": True,
+        "timestamp": datetime.now().isoformat(),
+        "market_leaders": leaders,
+        "last_valid_up": up,
+        "last_valid_down": down
     }
-
-    _LAST_VALID_STATE = state
+    
+    # Cache su disco
+    try:
+        with open(DB_FILE, "w") as f:
+            json.dump(state, f)
+    except: pass
+        
     return state

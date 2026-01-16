@@ -1,51 +1,40 @@
 import requests
-import time
 
-# Simple in-memory cache
-_LAST_MARKET_DATA = None
-_LAST_TIMESTAMP = 0
-
-
-def _fetch_binance():
+def fetch_from_binance():
+    # Usiamo l'endpoint 24h ticker
     url = "https://api.binance.com/api/v3/ticker/24hr"
-    r = requests.get(url, timeout=5)
-    r.raise_for_status()
-    return r.json()
-
-
-def _fetch_coinbase():
-    url = "https://api.exchange.coinbase.com/products"
-    r = requests.get(url, timeout=5)
-    r.raise_for_status()
-    products = r.json()
-
-    result = []
-    for p in products:
-        if not p.get("id") or "-" not in p["id"]:
-            continue
-        result.append({
-            "symbol": p["base_currency"],
-            "name": p["base_currency"]
-        })
-    return result
-
-
-def fetch_market_data():
-    """
-    Fetch market data with fallback and cache.
-    """
-    global _LAST_MARKET_DATA, _LAST_TIMESTAMP
-
-    now = time.time()
-    if _LAST_MARKET_DATA and now - _LAST_TIMESTAMP < 300:
-        return _LAST_MARKET_DATA, False
-
     try:
-        data = _fetch_binance()
-        _LAST_MARKET_DATA = data
-        _LAST_TIMESTAMP = now
-        return data, False
-    except Exception:
-        if _LAST_MARKET_DATA:
-            return _LAST_MARKET_DATA, True
-        raise
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        print(f"Connection Error: {e}")
+        return []
+    
+    results = []
+    for item in data:
+        symbol = item['symbol']
+        # Filtro: Solo USDT e Volume > 3M per evitare "shitcoins" illiquide
+        if symbol.endswith("USDT") and float(item['quoteVolume']) > 3000000:
+            c24 = float(item['priceChangePercent'])
+            
+            # --- MIGLIORIA CALCOLO ---
+            # Calcoliamo la volatilità intraday (High - Low) / Low
+            high = float(item['highPrice'])
+            low = float(item['lowPrice'])
+            volatility_factor = (high - low) / low if low > 0 else 0
+            
+            # Stima 1H migliorata: Amplifica la stima in base alla volatilità reale
+            raw_1h = (c24 / 24)
+            amplified_1h = raw_1h * (1.0 + (volatility_factor * 8.0))
+            
+            results.append({
+                "symbol": symbol.replace("USDT", ""),
+                "change_24h": round(c24, 2),
+                "change_1h": round(amplified_1h, 2),
+                "volume": float(item['quoteVolume'])
+            })
+    return results
+
+def fetch_assets_snapshot():
+    return fetch_from_binance()
