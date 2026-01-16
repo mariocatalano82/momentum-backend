@@ -1,14 +1,12 @@
 import math
 import hashlib
 
-# Dizionario esteso nomi criptovalute
 COIN_NAMES = {
     "BTC": "Bitcoin", "ETH": "Ethereum", "XRP": "Ripple", "SOL": "Solana",
     "ADA": "Cardano", "DOT": "Polkadot", "MATIC": "Polygon", "LINK": "Chainlink",
     "AVAX": "Avalanche", "DOGE": "Dogecoin", "SHIB": "Shiba Inu", "FET": "Artificial Intelligence",
-    "GLMR": "Moonbeam", "RNDR": "Render Token", "NEAR": "Near Protocol", "PEPE": "Pepe Coin",
-    "TIA": "Celestia", "INJ": "Injective", "SUI": "Sui Network", "APT": "Aptos",
-    "OP": "Optimism", "ARB": "Arbitrum", "LTC": "Litecoin", "BCH": "Bitcoin Cash"
+    "NEAR": "Near Protocol", "PEPE": "Pepe Coin", "TIA": "Celestia", "INJ": "Injective",
+    "SUI": "Sui Network", "APT": "Aptos", "OP": "Optimism", "ARB": "Arbitrum"
 }
 
 def get_full_name(symbol):
@@ -16,16 +14,16 @@ def get_full_name(symbol):
 
 def generate_human_advice(symbol, change_1h, hourly_avg, intensity, is_up):
     name = get_full_name(symbol)
-    direction = "salita" if is_up else "discesa"
+    direction = "upward" if is_up else "downward"
     
     if intensity > 7:
-        return f"Movimento anomalo su {name}. La velocità attuale ({abs(change_1h)}%) è {int(intensity)} volte superiore alla norma oraria di {hourly_avg:.2f}%. Pressione {direction} estrema, tipica di breakout istituzionale. Probabile continuazione, ma attenzione a possibili ritracciamenti tecnici."
+        return f"Extreme anomaly on {name}. Current velocity ({abs(change_1h)}%) is {int(intensity)}x the hourly norm of {hourly_avg:.2f}%. High institutional pressure detected. Breakout likely to persist, watch for over-extension."
     elif intensity > 2.5:
-        return f"Momentum solido per {name}. Il trend in {direction} mostra una forza reale, staccandosi nettamente dalla media giornaliera. C'è convinzione matematica dietro questo movimento: alta probabilità di persistenza per le prossime 2 ore."
+        return f"Solid momentum for {name}. The {direction} trend shows real strength, decoupling from the daily average. High mathematical conviction for the next 2 hours."
     elif intensity > 1.0:
-        return f"{name} si muove in linea con il mercato. La velocità di {abs(change_1h)}% è leggermente superiore alla media oraria ({hourly_avg:.2f}%). Indica interesse costante ma non esplosivo. Ottimo per strategie trend-following a basso rischio."
+        return f"{name} is moving with market flow. Velocity of {abs(change_1h)}% is slightly above avg ({hourly_avg:.2f}%). Stable interest, low risk for trend following."
     else:
-        return f"Segnale debole su {name}. La spinta attuale è inferiore alla volatilità media registrata nelle ultime 24 ore. Il movimento manca di 'carburante' volumetrico; possibile fase laterale o fakeout."
+        return f"Weak signal on {name}. Current thrust is below 24h volatility. Movement lacks volume support; potential fakeout or sideways phase."
 
 def compute_confidence(change_1h, change_24h, symbol):
     hourly_avg = abs(change_24h) / 24
@@ -42,18 +40,9 @@ def compute_confidence(change_1h, change_24h, symbol):
     
     final_prob = round(max(25, min(98.5, base + noise)), 1)
     
-    context = {
-        "bias": "BULLISH" if is_up else "BEARISH",
-        "strength_score": round(min(10, intensity * 1.5), 1),
-        "summary": f"Speed: {abs(change_1h)}% vs Avg: {hourly_avg:.2f}%",
+    return final_prob, {
         "human_advice": generate_human_advice(symbol, change_1h, hourly_avg, intensity, is_up)
     }
-    return final_prob, context
 
 def build_chart(change_1h):
-    points = []
-    for i in range(12):
-        t = i / 11
-        val = change_1h * (math.pow(t, 1.5)) 
-        points.append(round(val, 2))
-    return points
+    return [round(change_1h * (math.pow(i / 11, 1.5)), 2) for i in range(12)]
