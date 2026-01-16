@@ -1,36 +1,50 @@
 import math
 import hashlib
 
-def get_full_name(symbol):
-    names = {
-        "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "Ripple", 
-        "ADA": "Cardano", "DOT": "Polkadot", "FET": "Artificial Intelligence", 
-        "AVAX": "Avalanche", "LINK": "Chainlink", "MATIC": "Polygon", 
-        "NEAR": "Near Protocol", "TIA": "Celestia", "PEPE": "Pepe Coin", 
-        "INJ": "Injective", "SUI": "Sui Network"
-    }
-    return names.get(symbol, symbol)
-
-def compute_confidence(change_1h, change_24h, symbol):
-    hourly_avg = abs(change_24h) / 24
-    intensity = abs(change_1h) / (hourly_avg + 0.01)
-    is_up = change_1h > 0
-    
-    if (change_1h > 0) == (change_24h > 0):
-        base = 55 + (min(intensity, 10) * 4)
-    else:
-        base = 40 + (min(intensity, 10) * 5)
-    
+def get_deterministic_noise(symbol):
     hash_val = int(hashlib.md5(symbol.encode()).hexdigest(), 16)
-    noise = ((hash_val % 100) / 100 * 1.5) - 0.75
-    prob = round(max(15.0, min(99.4, base + noise)), 1)
+    return ((hash_val % 100) / 100 * 0.6) - 0.3
 
-    return prob, {
-        "bias": "AGGRESSIVE BULLISH" if is_up and intensity > 3 else "BULLISH" if is_up else "BEARISH",
-        "strength_score": round(min(10, intensity * 1.25), 1),
-        "summary": f"Speed: {abs(change_1h)}% | Hourly Norm: {hourly_avg:.3f}% | Ratio: {intensity:.2f}x",
-        "human_advice": f"The asset is exhibiting significant trend decoupling. Velocity is {intensity:.1f}x the standard hourly volatility. Mathematical conviction suggests trend continuation."
-    }
+def compute_confidence(change_1h, change_24h, profile, symbol):
+    avg_hourly_24h = change_24h / 24
+    intensity_ratio = abs(change_1h) / (abs(avg_hourly_24h) + 0.1)
+    is_convergent = (change_1h > 0) == (change_24h > 0)
+    
+    if is_convergent:
+        base_score = 72 + (min(intensity_ratio, 4.0) * 5)
+    else:
+        base_score = 48 + (min(intensity_ratio, 2.5) * 4)
+
+    if profile == "aggressive":
+        base_score += 4.0
+
+    final_conf = base_score + get_deterministic_noise(symbol)
+    return round(max(35.0, min(97.5, final_conf)), 1)
 
 def build_chart(change_1h):
-    return [round(change_1h * (math.log(i + 1) / math.log(13)), 3) for i in range(12)]
+    points = []
+    for i in range(12):
+        t = i / 11
+        val = change_1h * (math.pow(t, 1.4)) 
+        points.append(round(val, 2))
+    return points
+
+def tech_context(change_1h, change_24h):
+    ratio = abs(change_1h) / (abs(change_24h/24) + 0.1)
+    
+    if ratio > 2.5:
+        advice = "STRONG ACCELERATION: Hourly momentum is dominating the daily trend. High probability of extension in the next 2h."
+        score = 8.8
+    elif ratio > 1.0:
+        advice = "STEADY TREND: Movement is supported by consistent volume. Solid structure for holding the position."
+        score = 6.5
+    else:
+        advice = "CONSOLIDATION: Hourly momentum is lower than the daily average. Expect sideways movement or volatility compression."
+        score = 4.2
+
+    return {
+        "bias": "BULLISH" if change_1h > 0 else "BEARISH",
+        "advice": advice,
+        "strength_score": score,
+        "summary": f"Current speed {abs(change_1h)}% vs 24h average {abs(round(change_24h/24, 2))}%."
+    }
