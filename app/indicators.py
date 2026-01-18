@@ -2,10 +2,12 @@ import math
 import hashlib
 
 def get_deterministic_noise(symbol):
+    """Aggiunge micro-variazioni deterministiche per evitare grafici piatti"""
     hash_val = int(hashlib.md5(symbol.encode()).hexdigest(), 16)
     return ((hash_val % 100) / 100 * 0.8) - 0.4
 
 def compute_confidence(change_1h, change_24h, profile, symbol):
+    """Calcola la % di Momentum"""
     avg_hourly = abs(change_24h) / 24
     intensity = abs(change_1h) / (avg_hourly + 0.05)
     is_convergent = (change_1h > 0) == (change_24h > 0)
@@ -20,37 +22,40 @@ def compute_confidence(change_1h, change_24h, profile, symbol):
     return round(max(35.0, min(98.5, final_conf)), 1)
 
 def build_chart(change_1h):
+    """Simula un grafico sparkline basato sul trend 1h"""
     return [round(change_1h * (1.1 * math.sin((i/11) * 1.6)), 3) for i in range(12)]
 
 def tech_context(change_1h, change_24h, symbol, probability):
-    avg = abs(change_24h) / 24
-    ratio = abs(change_1h) / (avg + 0.05)
+    """Genera Action Logic, spiegazioni e predizioni"""
     
-    # 1. TECH CARD OUTLOOK (Market context)
+    # --- ACTION LOGIC ---
     if change_1h > 0:
-        if ratio > 2.5:
-            outlook = f"{symbol} is experiencing a violent momentum breakout. It has entered the ranking because its current speed is {round(ratio,1)}x higher than its daily average, suggesting a major inflow of capital or news-driven volatility."
+        if probability > 88:
+            action = "Climax Run"
+            expl = f"{symbol} is showing an overextended vertical move. Momentum is peak-level."
+        elif probability > 70:
+            action = "Trend Following"
+            expl = f"Solid upward trajectory for {symbol}. Volume supports the trend."
         else:
-            outlook = f"{symbol} shows a steady upward trend. It secured a spot in the ranking due to its consistent price appreciation over the last hour, maintaining a healthy balance between volume and price growth."
+            action = "Testing Resistance"
+            expl = f"{symbol} is attempting to break higher with moderate conviction."
     else:
-        if ratio > 2.5:
-            outlook = f"{symbol} is under heavy selling pressure. Its rapid decline relative to the 24h trend indicates a sharp momentum shift, likely triggering stop-losses and increasing liquidation risks."
+        if probability > 85:
+            action = "Panic Flush"
+            expl = f"Aggressive selling pressure on {symbol}. Watch for liquidations."
         else:
-            outlook = f"{symbol} is slowly losing ground. The downward momentum is controlled but persistent, placing it among the top losers as buyers fail to provide significant support at current levels."
+            action = "Soft Bleed"
+            expl = f"{symbol} is slowly losing key support levels."
 
-    # 2. CONFIDENCE CARD (Calculation interpretation & Prediction)
-    if probability > 90:
-        conf_expl = f"The {probability}% score indicates an extreme statistical anomaly. The momentum is so vertical that it is deviating significantly from standard market behavior."
-        pred = "Expect high volatility. In the next 2 hours, the asset will likely attempt a final 'blow-off' peak followed by a sharp technical correction (Mean Reversion)."
-    elif probability > 75:
-        conf_expl = f"A {probability}% score represents a confirmed and strong trend. The mathematical alignment between 1h and 24h movements is highly optimized."
-        pred = "The momentum is expected to persist. In the next 2 hours, the asset has a high probability of maintaining its current direction with minor pullbacks."
+    # --- PREDICTION ---
+    if probability > 80:
+        pred = "Expect high volatility and testing of new local extremes within 2 hours."
     else:
-        conf_expl = f"The {probability}% score shows moderate conviction. The signal is present but lacks the acceleration needed for a guaranteed breakout."
-        pred = "Expect choppy movement. The asset might enter a brief consolidation phase before the next significant move."
+        pred = "Likely consolidation or sideways choppy movement."
 
     return {
-        "outlook": outlook,
-        "confidence_explanation": conf_expl,
-        "prediction": pred
+        "action_logic": action,           # PER IL FRONTEND
+        "confidence_explanation": expl,   # PER IL FRONTEND
+        "prediction": pred,               # PER IL FRONTEND
+        "outlook": f"Market analysis: {action}" 
     }
