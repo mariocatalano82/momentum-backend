@@ -1,7 +1,6 @@
 import math
 import hashlib
 
-# --- DIZIONARIO DESCRIZIONI ---
 COIN_DESCRIPTIONS = {
     "BTC": "Bitcoin is the first decentralized digital currency, serving as a global store of value.",
     "ETH": "Ethereum is the leading smart contract platform for dApps and DeFi.",
@@ -18,91 +17,59 @@ COIN_DESCRIPTIONS = {
 def get_coin_description(symbol):
     return COIN_DESCRIPTIONS.get(symbol, f"{symbol} is a digital asset driven by market speculation and utility.")
 
-def get_deterministic_noise(symbol):
-    hash_val = int(hashlib.md5(symbol.encode()).hexdigest(), 16)
-    return ((hash_val % 100) / 100 * 0.8) - 0.4
-
-def compute_confidence(change_1h, change_24h, profile, symbol):
-    avg_hourly = abs(change_24h) / 24
-    intensity = abs(change_1h) / (avg_hourly + 0.05)
-    is_convergent = (change_1h > 0) == (change_24h > 0)
-    
-    if is_convergent:
-        base = 68 + (min(intensity, 5) * 5.5)
-    else:
-        base = 42 + (min(intensity, 4) * 7)
-
-    if profile == "aggressive": base += 3.5
-    final_conf = base + get_deterministic_noise(symbol)
-    return round(max(35.0, min(98.5, final_conf)), 1)
-
-def build_chart(change_1h):
-    return [round(change_1h * (1.1 * math.sin((i/11) * 1.6)), 3) for i in range(12)]
-
 def generate_ranking_reason(c1h, c24, symbol, prob):
-    c1h_r = round(c1h, 2)
-    c24_r = round(c24, 2)
+    c1h_r, c24_r = round(c1h, 2), round(c24, 2)
     if c1h > 0:
-        if c24 > 0:
-            return f"{symbol} shows 'Momentum Convergence'. Strong daily trend (+{c24_r}%) accelerated by a sharp hourly move (+{c1h_r}%)."
+        if c24 > 0: return f"{symbol} shows 'Momentum Convergence'. Strong daily trend (+{c24_r}%) accelerated by a sharp hourly move (+{c1h_r}%)."
         return f"{symbol} triggers a 'Reversal Spike'. Recovering from a red day with high hourly conviction (+{c1h_r}%)."
     else:
-        if c24 < 0:
-            return f"{symbol} exhibits 'Panic Continuity'. Bearish pressure on both 24h (-{abs(c24_r)}%) and 1h (-{abs(c1h_r)}%) scales."
+        if c24 < 0: return f"{symbol} exhibits 'Panic Continuity'. Bearish pressure on both 24h (-{abs(c24_r)}%) and 1h (-{abs(c1h_r)}%) scales."
         return f"{symbol} in 'Profit Taking' phase. Pulling back (-{abs(c1h_r)}%) despite a positive daily performance."
 
 def tech_context(change_1h, change_24h, symbol, probability, profile):
-    c1h = round(change_1h, 2)
-    c24 = round(change_24h, 2)
+    c1h, c24 = round(change_1h, 2), round(change_24h, 2)
     is_bullish = c1h > 0
-
-    # 1. GENERAZIONE PREDICTION ACTION (2H) - DINAMICA E ALLINEATA
+    
+    # --- 1. ALERT DI CLIMAX & PREDICTION ---
+    alert = ""
+    if probability > 92 and abs(c1h) > 4:
+        alert = "⚠️ MARKET CLIMAX: Extreme momentum. High risk of sharp mean reversion. "
+    
     if probability > 85:
-        scenario = f"CRITICAL {'EXPANSION' if is_bullish else 'FLUSH'}: High velocity move detected."
-        if profile == "aggressive":
-            advice = f"Strategy: {'Scalp long with tight stops' if is_bullish else 'Short momentum or stay flat'}. High risk of blow-off."
-        else:
-            advice = f"Strategy: Avoid entry. {'Overextended' if is_bullish else 'Falling knife'}. Wait for stabilization."
+        scenario = f"CRITICAL {'EXPANSION' if is_bullish else 'FLUSH'}"
+        advice = f"Strategy: {'Scalp long/tight stops' if is_bullish else 'Short momentum or flat'}. {alert}"
     elif probability > 70:
-        scenario = f"TREND {'CONTINUATION' if is_bullish else 'DRIFT'}: Directional strength is confirmed."
-        if profile == "aggressive":
-            advice = f"Strategy: {'Entry zone healthy' if is_bullish else 'Short-biased approach'}. Follow the 1H lead."
-        else:
-            advice = f"Strategy: Confirm volume spike on next candle before {'buying' if is_bullish else 'exiting'}."
+        scenario = f"TREND {'CONTINUATION' if is_bullish else 'DRIFT'}"
+        advice = f"Strategy: {'Entry zone healthy' if is_bullish else 'Short-biased approach'}. Check next 1H candle."
     else:
-        scenario = "NEUTRAL DRIFT: Choppy price action expected within the 2H window."
-        advice = "Strategy: No edge. Score below 75% indicates noise. Wait for confidence increase."
+        scenario = "NEUTRAL DRIFT"
+        advice = "Strategy: No edge. Score below 75% indicates noise. Wait for confirmation."
 
-    full_prediction = f"{scenario}\n\n{advice}"
+    # --- 2. OUTLOOK MULTI-SCENARIO ---
+    if is_bullish and c24 < -3: outlook = "V-Shape Recovery attempt. Monitoring for bottom confirmation."
+    elif not is_bullish and c24 > 3: outlook = "Distribution phase. Possible local top forming."
+    else: outlook = f"{'Strong' if probability > 80 else 'Weak'} {'Upside' if is_bullish else 'Downside'} continuation."
 
-    # 2. DRIVERS E MEANING
-    if probability > 88:
-        meaning = "A 'Statistical Anomaly': Current pressure is in the top 5% of recent volatility."
-    elif probability > 75:
-        meaning = "A 'Confirmed Trend': Momentum is consistent with volume support."
-    else:
-        meaning = " 'Moderate Conviction': Move lacks full multi-timeframe confirmation."
+    # --- 3. ACTION LOGIC GRANULARE ---
+    vol_ratio = abs(c1h) / (abs(c24/24) + 0.01)
+    if probability > 88: logic = "CLIMAX"
+    elif vol_ratio > 3: logic = "VOL SPIKE"
+    elif (c1h > 0) != (c24 > 0): logic = "REVERSAL"
+    elif probability > 70: logic = "TREND"
+    else: logic = "STABLE"
 
-    if is_bullish and c24 > 0:
-        drivers = f"Convergence: Bullish on both daily (+{c24}%) and hourly (+{c1h}%) scales."
-    elif not is_bullish and c24 < 0:
-        drivers = f"Panic Flow: Bearish synergy detected across 24h and 1h intervals."
-    else:
-        drivers = f"Divergence: 1H ({c1h}%) is fighting the 24H ({c24}%) trend."
-
-    # 3. TECHNICALS
-    rsi_proxy = int(probability) if is_bullish else (100 - int(probability))
-    rsi_proxy = max(15, min(95, rsi_proxy))
-    vol_impact = "HIGH" if abs(c1h) > abs(c24/20) else "NORM"
+    # --- 4. VOL IMPACT DESCRITTIVO ---
+    if vol_ratio > 2.5: vol_impact = f"HIGH ({round(vol_ratio,1)}x avg volume)"
+    else: vol_impact = "NORMAL (Low institutional interest)"
 
     return {
-        "action_logic": "CLIMAX" if probability > 88 else ("TREND" if probability > 70 else "TESTING"),
-        "confidence_meaning": meaning,
-        "score_drivers": drivers,
-        "prediction_action": full_prediction,
-        "rsi": rsi_proxy,
+        "action_logic": logic,
+        "confidence_meaning": "Statistical Anomaly" if probability > 88 else ("Confirmed Trend" if probability > 75 else "Moderate Conviction"),
+        "score_drivers": f"{'Convergence' if (c1h>0)==(c24>0) else 'Divergence'}: 1H ({c1h}%) vs 24H ({c24}%)",
+        "prediction_action": f"{scenario}\n\n{advice}",
+        "rsi": max(15, min(95, int(probability) if is_bullish else (100 - int(probability)))),
         "vol_increase": vol_impact,
         "description": get_coin_description(symbol),
         "ranking_reason": generate_ranking_reason(change_1h, change_24h, symbol, probability),
-        "outlook": f"Analysis: {'Strong' if probability > 80 else 'Weak'} {'Upside' if is_bullish else 'Downside'}"
+        "outlook": outlook
     }
