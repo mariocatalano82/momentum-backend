@@ -1,7 +1,7 @@
 import math
 import hashlib
 
-# --- DIZIONARIO DESCRIZIONI (Invariato) ---
+# --- DIZIONARIO DESCRIZIONI ---
 COIN_DESCRIPTIONS = {
     "BTC": "Bitcoin is the first decentralized digital currency, serving as a global store of value.",
     "ETH": "Ethereum is the leading smart contract platform for dApps and DeFi.",
@@ -40,80 +40,69 @@ def build_chart(change_1h):
     return [round(change_1h * (1.1 * math.sin((i/11) * 1.6)), 3) for i in range(12)]
 
 def generate_ranking_reason(c1h, c24, symbol, prob):
-    """
-    Spiega in linguaggio semplice PERCHÉ la moneta è in classifica.
-    """
-    c1h = round(c1h, 2)
-    c24 = round(c24, 2)
-    
+    c1h_r = round(c1h, 2)
+    c24_r = round(c24, 2)
     if c1h > 0:
-        # SCENARIO POSITIVO
         if c24 > 0:
-            return f"{symbol} is in the Top Leaders because it shows 'Momentum Convergence'. It was already strong over 24h (+{c24}%) and has accelerated further in the last hour (+{c1h}%), triggering the algorithm's high-confidence filter."
-        else:
-            return f"{symbol} enters the ranking due to a 'Reversal Spike'. Despite being down over 24h (-{abs(c24)}%), a sudden wave of buy volume in the last hour (+{c1h}%) suggests a potential bottom or a short-term bounce."
+            return f"{symbol} shows 'Momentum Convergence'. Strong daily trend (+{c24_r}%) accelerated by a sharp hourly move (+{c1h_r}%)."
+        return f"{symbol} triggers a 'Reversal Spike'. Recovering from a red day with high hourly conviction (+{c1h_r}%)."
     else:
-        # SCENARIO NEGATIVO
         if c24 < 0:
-            return f"{symbol} is flagged as a Top Loser because of 'Panic Continuity'. Sellers are dominating both the daily trend (-{abs(c24)}%) and the hourly session (-{abs(c1h)}%), indicating no immediate support."
-        else:
-            return f"{symbol} appears in the downtrend list due to 'Profit Taking'. While the long-term trend remains positive (+{c24}%), the current hour shows a sharp pullback (-{abs(c1h)}%) as traders lock in gains."
+            return f"{symbol} exhibits 'Panic Continuity'. Bearish pressure on both 24h (-{abs(c24_r)}%) and 1h (-{abs(c1h_r)}%) scales."
+        return f"{symbol} in 'Profit Taking' phase. Pulling back (-{abs(c1h_r)}%) despite a positive daily performance."
 
 def tech_context(change_1h, change_24h, symbol, probability, profile):
-    # Dati tecnici esistenti
     c1h = round(change_1h, 2)
     c24 = round(change_24h, 2)
-    
-    # --- LOGICA CONFIDENCE CARD (Invariata come piace a te) ---
-    if probability > 88:
-        meaning = f"A score of {probability}% represents a 'Statistical Anomaly'. Buy pressure is exceptional."
-    elif probability > 75:
-        meaning = f"A score of {probability}% indicates a 'Confirmed Trend'. Buyers are consistently in control."
-    else:
-        meaning = f"A score of {probability}% suggests 'Moderate Conviction'. The move is not yet fully confirmed."
+    is_bullish = c1h > 0
 
-    if c1h > 0 and c24 > 0:
-        drivers = f"Driven by Convergence: {symbol} is bullish on both daily (+{c24}%) and hourly (+{c1h}%) timeframes."
-    elif c1h < 0 and c24 > 0:
-        drivers = f"Penalized by Divergence: Daily trend is up (+{c24}%), but hourly profit-taking (-{abs(c1h)}%) lowers the score."
-    elif c1h > 0 and c24 < 0:
-        drivers = f"Boosted by Reversal: Despite a red day (-{abs(c24)}%), hourly recovery (+{c1h}%) is active."
-    else:
-        drivers = f"Reflecting Double Weakness: Both hourly (-{abs(c1h)}%) and daily (-{abs(c24)}%) metrics are bearish."
-
-    if change_1h > 0:
-        action_badge = "CLIMAX RUN" if probability > 88 else ("TREND FOLLOWING" if probability > 70 else "TESTING RES.")
-    else:
-        action_badge = "PANIC FLUSH" if probability > 85 else "SOFT BLEED"
-
+    # 1. GENERAZIONE PREDICTION ACTION (2H) - DINAMICA E ALLINEATA
     if probability > 85:
-        pred_scenario = "Expect extreme volatility and potential reversal within 2 hours."
-        advice = "Strategy: Tighten stops immediately. Risk of 'blow-off top' is high." if profile == "aggressive" else "Strategy: High Risk. Wait for a pullback."
+        scenario = f"CRITICAL {'EXPANSION' if is_bullish else 'FLUSH'}: High velocity move detected."
+        if profile == "aggressive":
+            advice = f"Strategy: {'Scalp long with tight stops' if is_bullish else 'Short momentum or stay flat'}. High risk of blow-off."
+        else:
+            advice = f"Strategy: Avoid entry. {'Overextended' if is_bullish else 'Falling knife'}. Wait for stabilization."
     elif probability > 70:
-        pred_scenario = "Expect trend continuation."
-        advice = "Strategy: Good zone for entry. Momentum is healthy." if profile == "aggressive" else "Strategy: Confirm volume on next candle before entering."
+        scenario = f"TREND {'CONTINUATION' if is_bullish else 'DRIFT'}: Directional strength is confirmed."
+        if profile == "aggressive":
+            advice = f"Strategy: {'Entry zone healthy' if is_bullish else 'Short-biased approach'}. Follow the 1H lead."
+        else:
+            advice = f"Strategy: Confirm volume spike on next candle before {'buying' if is_bullish else 'exiting'}."
     else:
-        pred_scenario = "Expect choppy sideways movement."
-        advice = "Strategy: No clear edge. Wait for score > 75%."
+        scenario = "NEUTRAL DRIFT: Choppy price action expected within the 2H window."
+        advice = "Strategy: No edge. Score below 75% indicates noise. Wait for confidence increase."
 
-    full_action_text = f"{pred_scenario}\n\n{advice}"
-    
-    # --- DATI PER TECH CARD (Integrati con Ranking Reason) ---
-    rsi_proxy = int(probability) if change_1h > 0 else (100 - int(probability))
+    full_prediction = f"{scenario}\n\n{advice}"
+
+    # 2. DRIVERS E MEANING
+    if probability > 88:
+        meaning = "A 'Statistical Anomaly': Current pressure is in the top 5% of recent volatility."
+    elif probability > 75:
+        meaning = "A 'Confirmed Trend': Momentum is consistent with volume support."
+    else:
+        meaning = " 'Moderate Conviction': Move lacks full multi-timeframe confirmation."
+
+    if is_bullish and c24 > 0:
+        drivers = f"Convergence: Bullish on both daily (+{c24}%) and hourly (+{c1h}%) scales."
+    elif not is_bullish and c24 < 0:
+        drivers = f"Panic Flow: Bearish synergy detected across 24h and 1h intervals."
+    else:
+        drivers = f"Divergence: 1H ({c1h}%) is fighting the 24H ({c24}%) trend."
+
+    # 3. TECHNICALS
+    rsi_proxy = int(probability) if is_bullish else (100 - int(probability))
     rsi_proxy = max(15, min(95, rsi_proxy))
-    vol_impact = "HIGH" if abs(change_1h) > abs(change_24h/20) else "NORM"
-    
-    description = get_coin_description(symbol)
-    ranking_reason = generate_ranking_reason(c1h, c24, symbol, probability) # NUOVA FUNZIONE
+    vol_impact = "HIGH" if abs(c1h) > abs(c24/20) else "NORM"
 
     return {
-        "action_logic": action_badge,
+        "action_logic": "CLIMAX" if probability > 88 else ("TREND" if probability > 70 else "TESTING"),
         "confidence_meaning": meaning,
         "score_drivers": drivers,
-        "prediction_action": full_action_text,
+        "prediction_action": full_prediction,
         "rsi": rsi_proxy,
         "vol_increase": vol_impact,
-        "description": description,       # Existing
-        "ranking_reason": ranking_reason, # NEW: The "Why in Ranking" text
-        "outlook": f"Analysis: {action_badge}"
+        "description": get_coin_description(symbol),
+        "ranking_reason": generate_ranking_reason(change_1h, change_24h, symbol, probability),
+        "outlook": f"Analysis: {'Strong' if probability > 80 else 'Weak'} {'Upside' if is_bullish else 'Downside'}"
     }
